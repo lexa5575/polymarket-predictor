@@ -39,8 +39,8 @@ class EventCandidate(BaseModel):
     question: str = Field(..., description='E.g. "Will BTC exceed $100K by June 2026?"')
     category: str = Field(default="crypto")
     end_date: datetime = Field(..., description="Market resolution date")
-    yes_book: TokenBook = Field(..., description="Full orderbook for YES token")
-    no_book: TokenBook = Field(..., description="Full orderbook for NO token")
+    yes_book: TokenBook  # Full orderbook for YES token
+    no_book: TokenBook  # Full orderbook for NO token
     market_prob_yes: float = Field(
         ...,
         description="Midpoint implied probability of YES outcome",
@@ -58,10 +58,7 @@ class BatchScanResult(BaseModel):
     Returns a ranked list of EventCandidates for fan-out processing.
     """
 
-    candidates: list[EventCandidate] = Field(
-        ...,
-        description="Ranked list of market candidates",
-    )
+    candidates: list[EventCandidate]  # Ranked list of market candidates
     total_scanned: int = Field(..., description="Total markets evaluated")
     filters_applied: dict[str, str] = Field(
         default_factory=dict,
