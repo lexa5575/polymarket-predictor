@@ -62,7 +62,13 @@ market_data_agent = Agent(
     name="Market Data Agent",
     model=Claude(id="claude-haiku-4-5-20251001"),
     db=agent_db,
-    instructions=instructions,
+    instructions=instructions + (
+        "\n\nCRITICAL: After your analysis, you MUST end your response with a raw JSON object on its own line containing these exact fields:"
+        "\ncoin_id, price_usd, change_24h_pct, market_cap, funding_rate (or null), open_interest (or null),"
+        "\nfear_greed_index (0-100), fear_greed_label, signal (Bullish/Neutral/Bearish)."
+        "\nExample: {\"coin_id\": \"ethereum\", \"price_usd\": 2064.82, \"change_24h_pct\": -4.78, \"market_cap\": 249100000000, \"funding_rate\": null, \"open_interest\": null, \"fear_greed_index\": 10, \"fear_greed_label\": \"Extreme Fear\", \"signal\": \"Bearish\"}"
+    ),
+    markdown=False,
     tools=[
         CoinGeckoTools(),
         CoinglassTools(api_key=COINGLASS_API_KEY),

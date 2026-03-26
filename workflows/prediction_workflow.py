@@ -91,8 +91,20 @@ def _step_content_to_model(
             return model_class.model_validate(content)
         # Handle JSON string
         if isinstance(content, str):
-            d = json.loads(content)
-            return model_class.model_validate(d)
+            # Try full string as JSON first
+            try:
+                d = json.loads(content)
+                return model_class.model_validate(d)
+            except (json.JSONDecodeError, Exception):
+                pass
+            # Fallback: find last JSON object in text (agent may embed JSON in prose)
+            import re
+            for match in reversed(list(re.finditer(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", content))):
+                try:
+                    d = json.loads(match.group())
+                    return model_class.model_validate(d)
+                except (json.JSONDecodeError, Exception):
+                    continue
     except Exception:
         pass
     return None
