@@ -9,10 +9,10 @@ Tools: Exa MCP web search.
 
 from agno.agent import Agent
 from agno.learn import LearnedKnowledgeConfig, LearningMachine, LearningMode
-from agno.models.xai import xAI
+from agno.models.openai import OpenAIChat
 from agno.tools.mcp import MCPTools
 
-from agents.settings import EXA_MCP_URL, XAI_MODEL_ID, team_knowledge, team_learnings
+from agents.settings import EXA_MCP_URL, team_knowledge, team_learnings
 from context import COMMITTEE_CONTEXT
 from db import get_postgres_db
 from schemas.market import SentimentReport
@@ -61,7 +61,7 @@ and market commentary relevant to specific prediction market events.
 news_agent = Agent(
     id="news-agent",
     name="News Agent",
-    model=xAI(id=XAI_MODEL_ID),
+    model=OpenAIChat(id="gpt-4o-mini"),  # Grok unstable with structured outputs; using OpenAI for reliable SentimentReport
     db=agent_db,
     instructions=instructions + (
         "\n\nIMPORTANT: If the web search tool fails, times out, or returns no results,"
@@ -73,7 +73,6 @@ news_agent = Agent(
     ),
     tools=[MCPTools(url=EXA_MCP_URL)],
     output_schema=SentimentReport,
-    use_json_mode=True,
     knowledge=team_knowledge,
     search_knowledge=True,
     learning=LearningMachine(

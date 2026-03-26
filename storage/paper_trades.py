@@ -58,8 +58,8 @@ class PaperTradeStore:
         with self._session_factory() as session:
             session.add(row)
             session.commit()
-
-        return self._row_to_model(row)
+            session.refresh(row)
+            return self._row_to_model(row)
 
     def resolve_trade(
         self,
