@@ -9,8 +9,6 @@ services:
       POSTGRES_DB: ${DB_DATABASE:-ai}
     volumes:
       - pgdata:/var/lib/postgresql
-    ports:
-      - "5432:5432"
     networks:
       - polymarket-predictor
 
@@ -20,30 +18,27 @@ services:
       dockerfile: Dockerfile
     image: ${IMAGE_NAME:-polymarket-predictor}:${IMAGE_TAG:-latest}
     container_name: polymarket-predictor-api
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     restart: unless-stopped
     ports:
-      - "8000:8000"
-    volumes:
-      - .:/app
+      - "${API_PORT:-8000}:8000"
     environment:
-      - RUNTIME_ENV=dev
-      - AGNO_DEBUG=True
-      - PYTHONPATH=/app
-      # Database
-      - DB_HOST=polymarket-predictor-db
-      - DB_PORT=5432
-      - DB_USER=${DB_USER:-ai}
-      - DB_PASS=${DB_PASS:-ai}
-      - DB_DATABASE=${DB_DATABASE:-ai}
-      - WAIT_FOR_DB=True
-      - PRINT_ENV_ON_LOAD=True
-      # API keys
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - XAI_API_KEY=${XAI_API_KEY}
-      - XAI_MODEL_ID=${XAI_MODEL_ID:-grok-4-1-fast-non-reasoning}
-      - EXA_API_KEY=${EXA_API_KEY}
-      - COINGLASS_API_KEY=${COINGLASS_API_KEY:-}
+      RUNTIME_ENV: prd
+      AGNO_DEBUG: "false"
+      PYTHONPATH: /app
+      DB_HOST: polymarket-predictor-db
+      DB_PORT: "5432"
+      DB_USER: ${DB_USER:-ai}
+      DB_PASS: ${DB_PASS:-ai}
+      DB_DATABASE: ${DB_DATABASE:-ai}
+      WAIT_FOR_DB: "true"
+      PRINT_ENV_ON_LOAD: "false"
+      TRACING_ENABLED: "false"
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      XAI_API_KEY: ${XAI_API_KEY}
+      XAI_MODEL_ID: ${XAI_MODEL_ID:-grok-4-1-fast-non-reasoning}
+      EXA_API_KEY: ${EXA_API_KEY}
+      COINGLASS_API_KEY: ${COINGLASS_API_KEY:-}
     depends_on:
       - polymarket-predictor-db
     networks:

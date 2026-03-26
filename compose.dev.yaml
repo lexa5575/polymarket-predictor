@@ -1,0 +1,14 @@
+# Dev overrides — use with: docker compose -f compose.yaml -f compose.dev.yaml up -d --build
+services:
+  polymarket-predictor-db:
+    ports:
+      - "5432:5432"
+
+  polymarket-predictor-api:
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    volumes:
+      - .:/app
+    environment:
+      RUNTIME_ENV: dev
+      AGNO_DEBUG: "true"
+      PRINT_ENV_ON_LOAD: "true"

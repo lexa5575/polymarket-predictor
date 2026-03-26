@@ -52,7 +52,7 @@ if IS_DEBUG:
 
 agent_os = AgentOS(
     name="Polymarket Predictor",
-    tracing=True,
+    tracing=os.getenv("TRACING_ENABLED", "false").lower() == "true",
     scheduler=True,
     scheduler_poll_interval=15,
     db=get_postgres_db(),

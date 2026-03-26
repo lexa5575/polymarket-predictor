@@ -16,6 +16,7 @@ from workflows.prediction_workflow import (
     _get_tagged_block,
     compute_position_sizing,
     conditional_logging,
+    ensure_data_quality,
 )
 
 
@@ -308,5 +309,115 @@ class TestConditionalLogging:
         assert trades[0].entry_fill_price == 0.42
 
     def test_unclear_action(self):
-        record = self._parse_record(conditional_logging("some random text"))
+        record = self._parse_record(conditional_logging(_make_step_input("some random text")))
         assert record["action"] == "SKIP"
+
+
+# ---------------------------------------------------------------------------
+# Remediation tests
+# ---------------------------------------------------------------------------
+
+
+class TestEnsureDataQuality:
+    def test_missing_sentiment_injects_fallback(self):
+        """No SentimentReport → neutral fallback injected."""
+        # Only market data present, no sentiment
+        context = '{"coin_id": "bitcoin", "price_usd": 67000, "signal": "Bullish"}'
+        result = ensure_data_quality(_make_step_input(context))
+        content = result.content
+        # Should have DATA_QUALITY tag
+        dq = _get_tagged_block(content, "DATA_QUALITY")
+        assert dq is not None
+        assert dq["force_skip"] is False
+        # Should have injected neutral sentiment
+        assert "fallback_no_search" in content
+        assert '"sentiment_score": 0.0' in content
+
+    def test_missing_market_data_forces_skip(self):
+        """No MarketSnapshot → force_skip, no synthetic data."""
+        # Only sentiment, no market data
+        context = '{"sentiment_score": 0.5, "confidence": 0.8, "query": "btc"}'
+        result = ensure_data_quality(_make_step_input(context))
+        dq = _get_tagged_block(result.content, "DATA_QUALITY")
+        assert dq is not None
+        assert dq["market_data_missing"] is True
+        assert dq["force_skip"] is True
+        # Should NOT contain synthetic market data
+        assert "coin_id" not in result.content or "fallback" not in result.content
+
+    def test_both_present_passthrough(self):
+        """Both data sources present → no fallback, no force_skip."""
+        context = (
+            '{"coin_id": "bitcoin", "price_usd": 67000}\n'
+            '{"sentiment_score": 0.3, "confidence": 0.6, "query": "btc"}'
+        )
+        result = ensure_data_quality(_make_step_input(context))
+        dq = _get_tagged_block(result.content, "DATA_QUALITY")
+        assert dq is not None
+        assert dq["force_skip"] is False
+        assert dq["market_data_missing"] is False
+
+
+class TestSizingDataQualityGate:
+    def _parse_sizing(self, step_output) -> dict:
+        content = step_output.content if hasattr(step_output, 'content') else str(step_output)
+        block = _get_tagged_block(content, "SIZING_DATA")
+        assert block is not None
+        return block
+
+    def test_data_quality_force_skip_kills_sizing(self):
+        """DATA_QUALITY force_skip → sizing immediately returns force_skip."""
+        dq_block = _emit_tagged_block("DATA_QUALITY", {
+            "market_data_missing": True, "force_skip": True,
+            "skip_reason": "Market data missing",
+        })
+        # Even with valid risk data, sizing should skip
+        risk_json = '{"estimated_prob_of_side": 0.7, "market_prob_of_side": 0.5}'
+        context = f"{dq_block}\n{risk_json}"
+        sizing = self._parse_sizing(compute_position_sizing(_make_step_input(context)))
+        assert sizing["force_skip"] is True
+        assert "Market data" in sizing.get("sizing_note", "")
+
+
+class TestConditionalLoggingMarkdownFallback:
+    def _parse_record(self, step_output) -> dict:
+        content = step_output.content if hasattr(step_output, 'content') else str(step_output)
+        block = _get_tagged_block(content, "RECORD_RESULT")
+        assert block is not None
+        return block
+
+    def test_parses_json_in_markdown_code_block(self):
+        """Decision output wrapped in ```json ... ``` → still parses."""
+        sizing_block = _emit_tagged_block("SIZING_DATA", {"force_skip": False})
+        decision = json.dumps({
+            "action": "SKIP", "condition_id": "0x1", "market_slug": "test",
+            "side": "YES", "stake": 0, "rationale": "test",
+        })
+        # Wrap in markdown code block
+        context = f'{sizing_block}\n```json\n{decision}\n```'
+        record = self._parse_record(conditional_logging(_make_step_input(context)))
+        assert record["action"] == "SKIP"
+
+    def test_force_skip_overrides_bet_decision(self, tmp_path, monkeypatch):
+        """SIZING_DATA.force_skip=true + Decision says BET → SKIP, no DB write."""
+        from storage.paper_trades import PaperTradeStore
+
+        test_store = PaperTradeStore(f"sqlite:///{tmp_path / 'test_override.db'}")
+        monkeypatch.setattr("workflows.prediction_workflow.get_paper_trade_store", lambda: test_store)
+
+        sizing_block = _emit_tagged_block("SIZING_DATA", {
+            "force_skip": True, "sizing_note": "Data quality gate",
+        })
+        decision = json.dumps({
+            "action": "BET", "condition_id": "0x1", "market_slug": "test",
+            "token_id": "t1", "side": "YES", "stake": 500,
+            "estimated_prob_of_side": 0.7, "market_prob_of_side_at_entry": 0.5,
+            "edge": 0.2, "entry_price": 0.51, "slippage_estimate": 0.01,
+            "underlier_group": "btc_price", "rationale": "test", "confidence": "High",
+        })
+        context = f"{sizing_block}\n{decision}"
+        record = self._parse_record(conditional_logging(_make_step_input(context)))
+        assert record["action"] == "SKIP"
+        assert record["trade_id"] is None
+        # No trade in DB
+        assert len(test_store.get_open_trades()) == 0

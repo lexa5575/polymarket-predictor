@@ -7,7 +7,6 @@ and serve as the formal handoff format between pipeline steps.
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -38,7 +37,7 @@ class EventCandidate(BaseModel):
     market_slug: str = Field(..., description="Human-readable slug for logs/memos")
     question: str = Field(..., description='E.g. "Will BTC exceed $100K by June 2026?"')
     category: str = Field(default="crypto")
-    end_date: datetime = Field(..., description="Market resolution date")
+    end_date: str = Field(..., description="Market resolution date (ISO format string)")
     yes_book: TokenBook  # Full orderbook for YES token
     no_book: TokenBook  # Full orderbook for NO token
     market_prob_yes: float = Field(

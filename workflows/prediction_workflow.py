@@ -51,6 +51,7 @@ logger = logging.getLogger(__name__)
 #   <!-- TAG_DATA -->{"key": "value", ...}<!-- /TAG_DATA -->
 # Downstream steps extract only the block they need via _get_tagged_block().
 
+_DATA_QUALITY_TAG = "DATA_QUALITY"
 _SIZING_TAG = "SIZING_DATA"
 _RECORD_TAG = "RECORD_RESULT"
 
@@ -63,6 +64,11 @@ def _emit_tagged_block(tag: str, data: dict) -> str:
 def _sizing_output(sizing: dict) -> StepOutput:
     """Wrap sizing dict as a StepOutput with tagged content."""
     return StepOutput(content=_emit_tagged_block(_SIZING_TAG, sizing))
+
+
+def _data_quality_output(data: dict) -> StepOutput:
+    """Wrap data quality check as a StepOutput with tagged content."""
+    return StepOutput(content=_emit_tagged_block(_DATA_QUALITY_TAG, data))
 
 
 def _record_output(result: dict) -> StepOutput:
@@ -115,6 +121,54 @@ def _extract_agent_json(context: str, key_marker: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# Function step: Data Quality Check
+# ---------------------------------------------------------------------------
+
+
+def ensure_data_quality(step_input: StepInput) -> StepOutput:
+    """Check that required data from parallel agents is present.
+
+    Runs after Data Collection (parallel) and before Risk Assessment.
+    - If SentimentReport missing: inject neutral fallback
+    - If MarketSnapshot missing: flag force_skip (no synthetic data)
+    """
+    context = str(step_input.previous_step_content or "")
+    if step_input.input:
+        context = str(step_input.input) + "\n" + context
+
+    sentiment_data = _extract_agent_json(context, "sentiment_score")
+    market_data = _extract_agent_json(context, "coin_id")
+
+    injections = []
+    quality = {"market_data_missing": False, "force_skip": False}
+
+    # Sentiment fallback — inject neutral if missing
+    if not sentiment_data:
+        logger.warning("SentimentReport missing — injecting neutral fallback.")
+        fallback_sentiment = {
+            "query": "fallback_no_search",
+            "sentiment_score": 0.0,
+            "key_narratives": ["No sentiment data — Exa search timed out"],
+            "sources_count": 0,
+            "confidence": 0.1,
+        }
+        injections.append(json.dumps(fallback_sentiment))
+
+    # MarketSnapshot missing — force skip, no synthetic data
+    if not market_data:
+        logger.warning("MarketSnapshot missing — flagging force_skip.")
+        quality["market_data_missing"] = True
+        quality["force_skip"] = True
+        quality["skip_reason"] = "Market data missing — cannot assess risk or size position"
+
+    result = _emit_tagged_block(_DATA_QUALITY_TAG, quality)
+    if injections:
+        result += "\n" + "\n".join(injections)
+
+    return StepOutput(content=result)
+
+
+# ---------------------------------------------------------------------------
 # Function step: Position Sizing
 # ---------------------------------------------------------------------------
 
@@ -130,6 +184,17 @@ def compute_position_sizing(step_input: StepInput) -> StepOutput:
     context = str(step_input.previous_step_content or "")
     if step_input.input:
         context = str(step_input.input) + "\n" + context
+
+    # --- Check DATA_QUALITY gate first ---
+    data_quality = _get_tagged_block(context, _DATA_QUALITY_TAG)
+    if data_quality and data_quality.get("force_skip"):
+        sizing = {
+            "force_skip": True,
+            "sizing_note": data_quality.get("skip_reason", "Data quality check failed"),
+            "recommended_stake": 0.0,
+            "sizing_method": "data_quality_gate",
+        }
+        return _sizing_output(sizing)
 
     # --- Extract RiskAssessment from agent output ---
     risk_data = _extract_agent_json(context, "estimated_prob_of_side")
@@ -264,9 +329,22 @@ def conditional_logging(step_input: StepInput) -> StepOutput:
 
     # --- Extract Decision Agent output (JSON with "action" key) ---
     decision_data = _extract_agent_json(context, "action")
+
+    # Fallback: try extracting JSON from markdown code blocks (```json ... ```)
     if not decision_data:
+        md_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", context, re.DOTALL)
+        if md_match:
+            try:
+                candidate = json.loads(md_match.group(1))
+                if "action" in candidate:
+                    decision_data = candidate
+                    logger.info("Parsed Decision Agent output from markdown code block.")
+            except json.JSONDecodeError:
+                pass
+
+    if not decision_data:
+        logger.warning("Could not parse Decision Agent output. Context tail: %s", context[-200:])
         result = {"action": "SKIP", "trade_id": None, "reason": "Could not parse Decision Agent output"}
-        logger.warning(result["reason"])
         return _record_output(result)
 
     action = (decision_data.get("action") or "").upper()
@@ -384,6 +462,7 @@ prediction_workflow = Workflow(
             Step(name="News & Sentiment", agent=news_agent),  # type: ignore[arg-type]
             name="Data Collection",
         ),
+        Step(name="Data Quality", executor=ensure_data_quality),
         Step(name="Risk Assessment", agent=risk_agent),
         Step(name="Position Sizing", executor=compute_position_sizing),
         Step(name="Decision", agent=decision_agent),

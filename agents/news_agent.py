@@ -63,7 +63,14 @@ news_agent = Agent(
     name="News Agent",
     model=xAI(id=XAI_MODEL_ID),
     db=agent_db,
-    instructions=instructions,
+    instructions=instructions + (
+        "\n\nIMPORTANT: If the web search tool fails, times out, or returns no results,"
+        "\nprovide your best sentiment assessment based on general crypto market knowledge."
+        "\nNEVER return an empty response. Always provide sentiment_score, key_narratives,"
+        "\nand confidence even without fresh search data (set confidence low in that case)."
+        "\n\nRespond with a JSON object: query, sentiment_score (-1 to 1), key_narratives (array),"
+        "\nsources_count, confidence (0 to 1)."
+    ),
     tools=[MCPTools(url=EXA_MCP_URL)],
     knowledge=team_knowledge,
     search_knowledge=True,

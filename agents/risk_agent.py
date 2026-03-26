@@ -74,7 +74,16 @@ risk_agent = Agent(
     name="Risk Agent",
     model=OpenAIChat(id="gpt-4o"),
     db=agent_db,
-    instructions=instructions,
+    instructions=instructions + (
+        "\n\nCRITICAL: Your response must be a single raw JSON object with ALL required fields."
+        "\nNo markdown. No explanation outside JSON."
+        "\nRequired: condition_id, risk_rating, recommended_side, estimated_prob_of_side,"
+        "\nmarket_prob_of_side, edge, underlier_group, warnings (array), liquidity_ok, correlated_positions."
+        "\n\nIf market data is missing or unclear, return a COMPLETE valid JSON with:"
+        "\nrisk_rating=Unacceptable, recommended_side=YES, estimated_prob_of_side=0.5,"
+        "\nmarket_prob_of_side=0.5, edge=0, underlier_group=other,"
+        "\nwarnings=[\"Market data missing\"], liquidity_ok=false, correlated_positions=0."
+    ),
     knowledge=team_knowledge,
     search_knowledge=True,
     learning=LearningMachine(
@@ -87,7 +96,7 @@ risk_agent = Agent(
     add_datetime_to_context=True,
     add_history_to_context=True,
     num_history_runs=5,
-    markdown=True,
+    markdown=False,
     enable_agentic_memory=True,
 )
 

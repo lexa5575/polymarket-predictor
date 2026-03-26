@@ -70,7 +70,16 @@ decision_agent = Agent(
     name="Decision Agent",
     model=OpenAIChat(id="gpt-4o"),
     db=agent_db,
-    instructions=instructions + "\n\nIMPORTANT: Always respond with a JSON object containing these exact fields: condition_id, market_slug, token_id, side (YES/NO), action (BET/SKIP), estimated_prob_of_side, market_prob_of_side_at_entry, edge, entry_price, slippage_estimate, stake, underlier_group, rationale, exit_conditions, confidence (High/Medium/Low).",
+    instructions=instructions + (
+        "\n\nCRITICAL OUTPUT FORMAT:"
+        "\nYour ENTIRE response must be a single raw JSON object. No markdown code blocks."
+        "\nNo explanation before or after the JSON. Just the JSON."
+        "\nRequired fields: condition_id, market_slug, token_id, side (YES/NO), action (BET/SKIP),"
+        "\nestimated_prob_of_side, market_prob_of_side_at_entry, edge, entry_price, slippage_estimate,"
+        "\nstake, underlier_group, rationale, exit_conditions (array), confidence (High/Medium/Low)."
+        "\n\nIf Position Sizing indicates force_skip=true, you MUST return action=SKIP with"
+        "\nstake=0, entry_price=0, slippage_estimate=0, token_id='' and safe defaults for all fields."
+    ),
     knowledge=team_knowledge,
     search_knowledge=True,
     learning=LearningMachine(
@@ -83,7 +92,7 @@ decision_agent = Agent(
     add_datetime_to_context=True,
     add_history_to_context=True,
     num_history_runs=5,
-    markdown=True,
+    markdown=False,
     enable_agentic_memory=True,
 )
 
