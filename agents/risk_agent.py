@@ -75,7 +75,6 @@ risk_agent = Agent(
     model=OpenAIChat(id="gpt-4o"),
     db=agent_db,
     instructions=instructions,
-    output_schema=RiskAssessment,
     knowledge=team_knowledge,
     search_knowledge=True,
     learning=LearningMachine(

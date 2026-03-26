@@ -70,8 +70,7 @@ decision_agent = Agent(
     name="Decision Agent",
     model=OpenAIChat(id="gpt-4o"),
     db=agent_db,
-    instructions=instructions,
-    output_schema=BetDecision,
+    instructions=instructions + "\n\nIMPORTANT: Always respond with a JSON object containing these exact fields: condition_id, market_slug, token_id, side (YES/NO), action (BET/SKIP), estimated_prob_of_side, market_prob_of_side_at_entry, edge, entry_price, slippage_estimate, stake, underlier_group, rationale, exit_conditions, confidence (High/Medium/Low).",
     knowledge=team_knowledge,
     search_knowledge=True,
     learning=LearningMachine(

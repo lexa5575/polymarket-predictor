@@ -65,7 +65,6 @@ news_agent = Agent(
     db=agent_db,
     instructions=instructions,
     tools=[MCPTools(url=EXA_MCP_URL)],
-    output_schema=SentimentReport,
     knowledge=team_knowledge,
     search_knowledge=True,
     learning=LearningMachine(
