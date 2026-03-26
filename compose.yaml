@@ -35,6 +35,7 @@ services:
       PRINT_ENV_ON_LOAD: "false"
       TRACING_ENABLED: "false"
       OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       XAI_API_KEY: ${XAI_API_KEY}
       XAI_MODEL_ID: ${XAI_MODEL_ID:-grok-4-1-fast-non-reasoning}
       EXA_API_KEY: ${EXA_API_KEY}
