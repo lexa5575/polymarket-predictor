@@ -41,7 +41,7 @@ services:
       # API keys
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - XAI_API_KEY=${XAI_API_KEY}
-      - XAI_MODEL_ID=${XAI_MODEL_ID:-grok-2-latest}
+      - XAI_MODEL_ID=${XAI_MODEL_ID:-grok-4-1-fast-non-reasoning}
       - EXA_API_KEY=${EXA_API_KEY}
       - COINGLASS_API_KEY=${COINGLASS_API_KEY:-}
     depends_on:

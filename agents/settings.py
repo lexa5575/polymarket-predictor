@@ -33,7 +33,7 @@ EXA_MCP_URL = f"https://mcp.exa.ai/mcp?exaApiKey={EXA_API_KEY}&tools=web_search_
 COINGLASS_API_KEY = getenv("COINGLASS_API_KEY", "")
 
 # xAI model ID — configurable via env for easy upgrades
-XAI_MODEL_ID = getenv("XAI_MODEL_ID", "grok-2-latest")
+XAI_MODEL_ID = getenv("XAI_MODEL_ID", "grok-4-1-fast-non-reasoning")
 
 # ---------------------------------------------------------------------------
 # Paper trade store — lazy factory to avoid import-time DB connection
