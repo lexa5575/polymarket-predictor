@@ -8,4 +8,5 @@ from schemas.market import (
     TokenBook,
 )
 from schemas.paper_trade import BankrollSnapshot, PaperTrade
+from schemas.price_prediction import PricePrediction, PricePredictionRequest
 from schemas.workflow_input import PredictionRequest

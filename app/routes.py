@@ -6,16 +6,19 @@ Additional endpoints beyond AgentOS defaults:
 - POST /api/scan-and-fanout — batch scan + fan-out workflow runs
 - POST /api/settle — check resolved markets, update paper trades
 - GET  /api/dashboard — current bankroll snapshot
+- POST /api/price-prediction — predict coin price direction
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import re
 
 from fastapi import APIRouter
 
 from agents.settings import get_paper_trade_store
+from schemas.price_prediction import PricePrediction, PricePredictionRequest
 from schemas.workflow_input import PredictionRequest
 from tools.polymarket import PolymarketTools
 
@@ -175,3 +178,120 @@ async def dashboard():
             for t in open_trades
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# Price Prediction
+# ---------------------------------------------------------------------------
+
+
+def _extract_dict_from_response(response) -> dict:
+    """Extract dict from agent response content (Pydantic model, dict, or JSON string)."""
+    if not response or response.content is None:
+        return {}
+    content = response.content
+    if hasattr(content, "model_dump"):
+        return content.model_dump(mode="json", exclude_none=True)
+    if isinstance(content, dict):
+        return content
+    if isinstance(content, str):
+        # Try full JSON parse
+        try:
+            return json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            pass
+        # Fallback: find last JSON object in text
+        for match in reversed(list(re.finditer(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", content))):
+            try:
+                return json.loads(match.group())
+            except (json.JSONDecodeError, TypeError):
+                continue
+    return {}
+
+
+@router.post("/price-prediction")
+async def price_prediction(request: PricePredictionRequest):
+    """Predict whether a coin's price will be above/below a target within timeframe.
+
+    Calls Market Data Agent, News Agent, and Risk Agent directly — no Polymarket needed.
+    """
+    from agents import market_data_agent, news_agent, risk_agent
+
+    # 1. Get market data
+    try:
+        market_response = market_data_agent.run(
+            f"Get current {request.coin} price, funding rate, open interest, and Fear & Greed index. "
+            f"Context: predicting whether {request.coin} will be {request.direction} "
+            f"${request.price_target:,.0f} in {request.timeframe}."
+        )
+        market_data = _extract_dict_from_response(market_response)
+    except Exception as e:
+        logger.error("Market data agent failed: %s", e)
+        market_data = {}
+
+    # 2. Get sentiment
+    try:
+        sentiment_response = news_agent.run(
+            f"What is the current sentiment for {request.coin} price "
+            f"in the next {request.timeframe}? Any catalysts or risks that could move the price?"
+        )
+        sentiment = _extract_dict_from_response(sentiment_response)
+    except Exception as e:
+        logger.error("News agent failed: %s", e)
+        sentiment = {"sentiment_score": 0.0, "key_narratives": ["News agent unavailable"], "confidence": 0.1}
+
+    # 3. Get prediction from Risk Agent
+    current_price = market_data.get("price_usd", 0)
+    fear_greed = market_data.get("fear_greed_index", 50)
+    signal = market_data.get("signal", "Unknown")
+    sent_score = sentiment.get("sentiment_score", 0)
+    narratives = sentiment.get("key_narratives", [])
+
+    try:
+        risk_response = risk_agent.run(
+            f"Predict: Will {request.coin} be {request.direction} ${request.price_target:,.0f} "
+            f"in the next {request.timeframe}?\n\n"
+            f"Current price: ${current_price:,.0f}\n"
+            f"24h change: {market_data.get('change_24h_pct', 0):.1f}%\n"
+            f"Fear & Greed Index: {fear_greed} ({market_data.get('fear_greed_label', 'Unknown')})\n"
+            f"Market signal: {signal}\n"
+            f"Funding rate: {market_data.get('funding_rate', 'N/A')}\n"
+            f"Open interest: {market_data.get('open_interest', 'N/A')}\n"
+            f"News sentiment score: {sent_score}\n"
+            f"Key narratives: {json.dumps(narratives)}\n\n"
+            f"Respond with your estimated probability (0-1) that {request.coin} "
+            f"WILL be {request.direction} ${request.price_target:,.0f} in {request.timeframe}, "
+            f"plus your confidence (High/Medium/Low) and rationale."
+        )
+        prediction = _extract_dict_from_response(risk_response)
+    except Exception as e:
+        logger.error("Risk agent failed: %s", e)
+        prediction = {"estimated_prob_of_side": 0.5, "risk_rating": "Unknown"}
+
+    # 4. Parse prediction
+    est_prob = prediction.get("estimated_prob_of_side") or prediction.get("estimated_probability") or 0.5
+    confidence = prediction.get("confidence") or prediction.get("risk_rating") or "Medium"
+    if confidence not in ("High", "Medium", "Low"):
+        confidence = "Medium"
+    rationale = (
+        prediction.get("rationale")
+        or " | ".join(prediction.get("warnings", []))
+        or f"Signal: {signal}, Sentiment: {sent_score}"
+    )
+
+    return PricePrediction(
+        coin=request.coin,
+        current_price=current_price,
+        price_target=request.price_target,
+        direction=request.direction,
+        timeframe=request.timeframe,
+        prediction="YES" if est_prob > 0.5 else "NO",
+        estimated_probability=round(est_prob, 3),
+        confidence=confidence,
+        signal=signal,
+        fear_greed_index=fear_greed,
+        sentiment_score=round(sent_score, 2),
+        rationale=rationale,
+        market_data=market_data,
+        sentiment=sentiment,
+    )
