@@ -1,62 +1,66 @@
 chat:
   quick_prompts:
     # Individual Agents
-    market-analyst:
-      - "What's the current market environment for tech stocks?"
-      - "Assess the macro outlook for semiconductors"
-      - "What's the latest news on NVIDIA?"
+    polymarket-scanner:
+      - "Scan active crypto prediction markets"
+      - "Find top 5 crypto events by liquidity"
+      - "What BTC markets are active on Polymarket?"
 
-    financial-analyst:
-      - "Analyze Apple's fundamentals"
-      - "Compare MSFT and GOOGL valuations"
-      - "What do analysts think about TSLA?"
+    polymarket-agent:
+      - "Get details for the BTC $100K prediction market"
+      - "Show orderbook depth for the ETH price market"
+      - "What's the implied probability for BTC hitting $150K?"
 
-    technical-analyst:
-      - "Is NVDA in a bullish or bearish trend?"
-      - "What are the key support levels for AAPL?"
-      - "Show me TSLA's technical indicators"
+    market-data-agent:
+      - "What's the current Bitcoin price and market data?"
+      - "Show me ETH funding rate and open interest"
+      - "What's the Crypto Fear & Greed Index right now?"
 
-    risk-officer:
-      - "What's the risk profile of NVDA at a $2M position?"
-      - "How much portfolio risk does adding META create?"
-      - "What's the maximum drawdown scenario for TSLA?"
+    news-agent:
+      - "What's the sentiment around BTC reaching $100K?"
+      - "Latest crypto regulatory news and impact"
+      - "What's X/Twitter saying about the Bitcoin ETF?"
+
+    risk-agent:
+      - "Evaluate risk for betting YES on BTC $100K by June"
+      - "How many correlated BTC positions do we have?"
+      - "Is this market liquid enough for a $500 bet?"
 
     knowledge-agent:
-      - "What does our research say about NVIDIA?"
-      - "Pull up our semiconductor sector analysis"
       - "What past memos do we have on file?"
+      - "How does Kelly Criterion work for prediction markets?"
+      - "Show me our track record on BTC price predictions"
 
-    memo-writer:
-      - "Write an investment memo for NVIDIA"
-      - "Draft a portfolio allocation memo for our top 5 picks"
+    logger-agent:
+      - "Write a memo for a BET YES on BTC $100K"
+      - "List all existing prediction memos"
 
-    committee-chair:
-      - "Should we invest in NVIDIA? Give me a final decision."
-      - "How should we allocate $3M across AI stocks?"
+    # decision-agent: Internal only — all BET/SKIP decisions go through the prediction workflow.
+    # Direct access retained in AgentOS UI for debugging, but no user-facing quick prompts.
 
-    # Teams
+    # Teams (analytical only — use workflow for actual BET/SKIP decisions)
     coordinate-team:
-      - "Should we invest in NVIDIA?"
-      - "Evaluate Microsoft for a $2M allocation"
-      - "Is now a good time to add tech exposure?"
+      - "Analyze the BTC $100K prediction market — what's the edge?"
+      - "What's the probability of ETH reaching $5K?"
+      - "Assess crypto ETF approval markets for potential opportunities"
 
     route-team:
-      - "What's AAPL's P/E ratio?"
-      - "What does our research say about Tesla?"
-      - "Write a memo on our MSFT position"
+      - "What's the Fear & Greed Index?"
+      - "Check our past BTC prediction memos"
+      - "What's the BTC funding rate?"
 
     broadcast-team:
-      - "Full committee review: evaluate TSLA for $2M"
-      - "All analysts: assess NVDA for our portfolio"
-      - "Committee vote: should we invest in META?"
+      - "Full team analysis: BTC $100K by June 2026 — probability and risk?"
+      - "All agents: what's our edge on the ETH ETF approval market?"
+      - "Independent assessment: is there mispricing on BTC $150K?"
 
     task-team:
-      - "Deploy $10M across the top 5 AI stocks"
-      - "Build a diversified tech portfolio under $5M"
-      - "Rebalance our portfolio to reduce risk"
+      - "Analyze top 5 crypto prediction markets — estimate edge for each"
+      - "Research BTC and ETH events and rank by opportunity"
+      - "Review all open positions and flag any for re-evaluation"
 
     # Workflows
-    investment-workflow:
-      - "Run full investment review on NVIDIA"
-      - "Process AAPL through the investment pipeline"
-      - "Standard review: evaluate GOOGL for purchase"
+    prediction-workflow:
+      - "Run full prediction analysis on BTC $100K market"
+      - "Process ETH $5K prediction through the pipeline"
+      - "Evaluate the BTC halving impact prediction market"

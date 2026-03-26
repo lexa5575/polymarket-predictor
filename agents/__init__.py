@@ -1,7 +1,7 @@
-from agents.committee_chair import committee_chair
-from agents.financial_analyst import financial_analyst
+from agents.decision_agent import decision_agent
 from agents.knowledge_agent import knowledge_agent
-from agents.market_analyst import market_analyst
-from agents.memo_writer import memo_writer
-from agents.risk_officer import risk_officer
-from agents.technical_analyst import technical_analyst
+from agents.logger_agent import logger_agent
+from agents.market_data_agent import market_data_agent
+from agents.news_agent import news_agent
+from agents.polymarket_agent import polymarket_agent, polymarket_scanner
+from agents.risk_agent import risk_agent

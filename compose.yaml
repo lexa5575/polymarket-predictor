@@ -1,7 +1,7 @@
 services:
-  investment-team-db:
+  polymarket-predictor-db:
     image: agnohq/pgvector:18
-    container_name: investment-team-db
+    container_name: polymarket-predictor-db
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${DB_USER:-ai}
@@ -12,27 +12,26 @@ services:
     ports:
       - "5432:5432"
     networks:
-      - investment-team
+      - polymarket-predictor
 
-  investment-team-api:
+  polymarket-predictor-api:
     build:
       context: .
       dockerfile: Dockerfile
-    image: ${IMAGE_NAME:-agno-investment-team}:${IMAGE_TAG:-latest}
-    container_name: investment-team-api
+    image: ${IMAGE_NAME:-polymarket-predictor}:${IMAGE_TAG:-latest}
+    container_name: polymarket-predictor-api
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     restart: unless-stopped
     ports:
       - "8000:8000"
     volumes:
-      # Hot-reload: mount source code
       - .:/app
     environment:
       - RUNTIME_ENV=dev
       - AGNO_DEBUG=True
       - PYTHONPATH=/app
       # Database
-      - DB_HOST=investment-team-db
+      - DB_HOST=polymarket-predictor-db
       - DB_PORT=5432
       - DB_USER=${DB_USER:-ai}
       - DB_PASS=${DB_PASS:-ai}
@@ -40,18 +39,20 @@ services:
       - WAIT_FOR_DB=True
       - PRINT_ENV_ON_LOAD=True
       # API keys
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - XAI_API_KEY=${XAI_API_KEY}
+      - XAI_MODEL_ID=${XAI_MODEL_ID:-grok-2-latest}
       - EXA_API_KEY=${EXA_API_KEY}
-      - PARALLEL_API_KEY=${PARALLEL_API_KEY:-}
+      - COINGLASS_API_KEY=${COINGLASS_API_KEY:-}
     depends_on:
-      - investment-team-db
+      - polymarket-predictor-db
     networks:
-      - investment-team
+      - polymarket-predictor
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
 networks:
-  investment-team:
+  polymarket-predictor:
 
 volumes:
   pgdata:

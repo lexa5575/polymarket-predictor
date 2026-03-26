@@ -9,7 +9,7 @@
 #    Prerequisites:
 #      - Railway CLI installed
 #      - Logged in via `railway login`
-#      - GOOGLE_API_KEY set in environment
+#      - OPENAI_API_KEY set in environment
 #
 ############################################################################
 
@@ -47,14 +47,14 @@ if ! command -v railway &> /dev/null; then
     exit 1
 fi
 
-if [[ -z "$GOOGLE_API_KEY" ]]; then
-    echo "GOOGLE_API_KEY not set."
+if [[ -z "$OPENAI_API_KEY" ]]; then
+    echo "OPENAI_API_KEY not set."
     exit 1
 fi
 
 echo -e "${BOLD}Initializing project...${NC}"
 echo ""
-railway init -n "investment-team"
+railway init -n "polymarket-predictor"
 
 echo ""
 echo -e "${BOLD}Deploying PgVector database...${NC}"
@@ -68,7 +68,7 @@ sleep 10
 echo ""
 echo -e "${BOLD}Creating application service...${NC}"
 echo ""
-railway add --service investment-team \
+railway add --service polymarket-predictor \
     --variables 'DB_USER=${{pgvector.PGUSER}}' \
     --variables 'DB_PASS=${{pgvector.PGPASSWORD}}' \
     --variables 'DB_HOST=${{pgvector.PGHOST}}' \
@@ -76,21 +76,23 @@ railway add --service investment-team \
     --variables 'DB_DATABASE=${{pgvector.PGDATABASE}}' \
     --variables "DB_DRIVER=postgresql+psycopg" \
     --variables "WAIT_FOR_DB=True" \
-    --variables "GOOGLE_API_KEY=${GOOGLE_API_KEY}" \
+    --variables "OPENAI_API_KEY=${OPENAI_API_KEY}" \
+    --variables "XAI_API_KEY=${XAI_API_KEY}" \
     --variables "EXA_API_KEY=${EXA_API_KEY}" \
+    --variables "COINGLASS_API_KEY=${COINGLASS_API_KEY}" \
     --variables "PORT=8000"
 
 echo ""
 echo -e "${BOLD}Deploying application...${NC}"
 echo ""
-railway up --service investment-team -d
+railway up --service polymarket-predictor -d
 
 echo ""
 echo -e "${BOLD}Creating domain...${NC}"
 echo ""
-railway domain --service investment-team
+railway domain --service polymarket-predictor
 
 echo ""
 echo -e "${BOLD}Done.${NC} Domain may take ~5 minutes."
-echo -e "${DIM}Logs: railway logs --service investment-team${NC}"
+echo -e "${DIM}Logs: railway logs --service polymarket-predictor${NC}"
 echo ""

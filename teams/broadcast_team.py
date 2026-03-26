@@ -2,40 +2,41 @@
 Broadcast Team
 --------------
 
-All four analysts evaluate simultaneously, then Chair synthesizes.
-Best for: high-stakes allocation decisions.
+All four data agents evaluate simultaneously, then Chair synthesizes.
+Best for: high-stakes betting decisions.
 """
 
 from agno.learn import LearnedKnowledgeConfig, LearningMachine, LearningMode
-from agno.models.google import Gemini
+from agno.models.openai import OpenAIChat
 from agno.team import Team, TeamMode
 
 from agents import (
-    financial_analyst,
-    market_analyst,
-    risk_officer,
-    technical_analyst,
+    market_data_agent,
+    news_agent,
+    polymarket_agent,
+    risk_agent,
 )
 from agents.settings import team_learnings
 
 broadcast_team = Team(
     id="broadcast-team",
-    name="Investment Team - Broadcast",
+    name="Crypto Team - Broadcast",
     mode=TeamMode.broadcast,
-    model=Gemini(id="gemini-3.1-pro-preview"),
+    model=OpenAIChat(id="gpt-4o"),
     members=[
-        market_analyst,
-        financial_analyst,
-        technical_analyst,
-        risk_officer,
+        polymarket_agent,
+        market_data_agent,
+        news_agent,
+        risk_agent,
     ],
     instructions=[
-        "You are the Committee Chair synthesizing independent analyst views.",
-        "All analysts have evaluated this investment simultaneously.",
-        "Synthesize their perspectives into a unified recommendation.",
-        "Note where analysts agree and disagree.",
-        "Provide a final BUY/HOLD/PASS decision with a specific dollar allocation.",
-        "Weight the Risk Officer's concerns heavily in position sizing.",
+        "You are the coordinator synthesizing independent agent analyses.",
+        "All agents have evaluated this prediction market simultaneously.",
+        "Synthesize their perspectives into a unified analytical view.",
+        "Note where agents agree and disagree on probability estimates.",
+        "Provide a RECOMMENDATION with estimated probability and risk rating.",
+        "NEVER output final BET/SKIP decisions or stake sizes. Those are computed by the prediction workflow.",
+        "Weight the Risk Agent's warnings heavily in your assessment.",
     ],
     learning=LearningMachine(
         knowledge=team_learnings,

@@ -1,4 +1,4 @@
-# Sample Questions — Agentic Investment Team
+# Sample Questions — Polymarket Predictor
 
 Use these to test each architecture and agent. Questions are grouped by which agent/team/workflow they target.
 
@@ -8,39 +8,39 @@ Use these to test each architecture and agent. Questions are grouped by which ag
 
 These should route to exactly one specialist.
 
-1. **What's AAPL's current P/E ratio?** → Financial Analyst
-2. **Is NVDA in a bullish or bearish trend right now?** → Technical Analyst
-3. **What's the latest news on Tesla?** → Market Analyst
-4. **What's the risk profile of a $2M MSFT position?** → Risk Officer
-5. **What past investment memos do we have on file?** → Knowledge Agent
-6. **What does our research say about the AI semiconductor sector?** → Knowledge Agent
-7. **Write an investment memo for Apple.** → Memo Writer
-8. **How should we allocate $5M across our top picks?** → Committee Chair
-9. **What did we decide about NVIDIA last time?** → Knowledge Agent
-10. **What's Amazon's free cash flow and debt situation?** → Financial Analyst
+1. **What crypto prediction markets are active on Polymarket?** → Polymarket Agent
+2. **What's the current Bitcoin price and 24h change?** → Market Data Agent
+3. **What's the sentiment around BTC reaching $100K?** → News Agent
+4. **What's the risk of betting YES on BTC $100K by June 2026?** → Risk Agent
+5. **What past prediction memos do we have on file?** → Knowledge Agent
+6. **How does Kelly Criterion work for prediction markets?** → Knowledge Agent
+7. **Write an audit memo for our last BTC bet.** → Logger Agent
+8. **What is the estimated edge on the ETH $5K prediction market?** → Risk Agent
+9. **What's the Crypto Fear & Greed Index right now?** → Market Data Agent
+10. **What's the funding rate for ETH?** → Market Data Agent
 
 ---
 
 ## Coordinate Team (Chair orchestrates dynamically)
 
-Open-ended investment questions that benefit from multi-analyst discussion.
+Open-ended prediction questions that benefit from multi-agent analysis.
 
-11. **Should we invest $2M in NVIDIA?**
-12. **Evaluate Microsoft for a potential $1.5M position.**
-13. **Is now a good time to add semiconductor exposure to our portfolio?**
-14. **We're considering a $1M position in Meta — what does the committee think?**
-15. **Should we increase our tech allocation or diversify into healthcare?**
+11. **Should we bet on BTC exceeding $100K by June 2026?**
+12. **Analyze the ETH ETF approval prediction market.**
+13. **Is there edge in any BTC price prediction markets right now?**
+14. **Should we bet YES or NO on the crypto regulation market?**
+15. **What's the best crypto prediction opportunity right now?**
 
 ---
 
 ## Broadcast Team (Parallel independent evaluation)
 
-High-stakes decisions where you want independent analyst opinions.
+High-stakes decisions where you want independent agent opinions.
 
-16. **Full committee review: evaluate Tesla for a $2M allocation.**
-17. **All analysts: assess Google for our portfolio. BUY or PASS?**
-18. **Committee vote: should we invest $1.5M in Amazon?**
-19. **Independent evaluation: is Apple a buy at current levels for a $2M position?**
+16. **Full team review: BTC $100K by June 2026 — what is the edge and risk?**
+17. **All agents: evaluate the ETH $5K prediction market.**
+18. **Committee analysis: is BTC $150K mispriced?**
+19. **Independent evaluation: BTC halving impact prediction market.**
 
 ---
 
@@ -48,45 +48,45 @@ High-stakes decisions where you want independent analyst opinions.
 
 Complex multi-step tasks that require planning and parallel work.
 
-20. **Deploy $10M across the top 5 AI stocks, no single position over 30%.**
-21. **Build a diversified portfolio: $3M in tech, $2M in healthcare, $1M in energy.**
-22. **Rebalance our portfolio to reduce tech concentration below 40%.**
-23. **Compare NVDA, AMD, and AVGO — which is the best semiconductor bet and at what allocation?**
-24. **Create a defensive portfolio of $5M that minimizes drawdown risk.**
+20. **Analyze the top 5 crypto prediction markets and rank them by edge.**
+21. **Build a ranked watchlist across BTC and ETH events, max $3K hypothetical risk.**
+22. **Review all open positions and recommend which to exit.**
+23. **Compare BTC $100K, $120K, and $150K prediction markets — where's the best edge?**
+24. **Evaluate all ETF-related prediction markets and rank by edge.**
 
 ---
 
-## Investment Workflow (Deterministic 5-step pipeline)
+## Prediction Workflow (Deterministic pipeline)
 
-Full investment reviews that should follow the fixed process.
+Full prediction reviews that follow the fixed 7-step process.
 
-25. **Run full investment review on NVIDIA.**
-26. **Process Apple through the complete investment pipeline.**
-27. **Standard review: evaluate Google for purchase.**
-28. **Run the full evaluation process on Microsoft for a $2M position.**
+25. **Run full prediction analysis on the BTC $100K market.**
+26. **Process the ETH $5K prediction market through the pipeline.**
+27. **Standard review: evaluate the BTC halving impact market.**
+28. **Run full analysis on the crypto regulation prediction market.**
 
 ---
 
 ## Stress Tests (Edge cases and mandate compliance)
 
-Questions that test risk limits, mandate rules, and institutional learning.
+Questions that test risk limits, mandate rules, and paper trading logic.
 
-29. **Should we put $5M into Tesla?** (Exceeds max single position for high-beta stock)
-30. **We already have 35% in tech. Can we add a $2M NVDA position?** (Tests sector cap)
-31. **Analyze a $500K position in a penny stock trading at $3.** (Prohibited by mandate)
-32. **What's the maximum we can invest in any single stock?** (Tests Layer 1 knowledge)
-33. **If we hold both NVDA and AMD, what's our correlation risk?** (Tests correlation limit)
-34. **We have $500K cash remaining. Should we deploy it or maintain the reserve?** (Tests 5% cash reserve rule)
+29. **Should we bet $3,000 on one market?** (Exceeds 20% max bet)
+30. **We have 3 open BTC price bets. Can we add another?** (Tests correlation limit)
+31. **Analyze a market with $5K 24h volume.** (Below $50K liquidity minimum)
+32. **What's the maximum we can bet on any single event?** (Tests Layer 1 knowledge)
+33. **What happens if our bankroll drops below $5,000?** (Tests circuit breaker)
+34. **A market has 8% bid-ask spread — should we still bet?** (Tests spread limit)
 
 ---
 
 ## Knowledge & Memory Tests
 
-Questions that test the three-layer knowledge system and institutional learning.
+Questions that test the three-layer knowledge system.
 
-35. **What does our NVIDIA research profile say about their competitive moat?** (Layer 2 — RAG)
-36. **Pull up the Tesla memo — what was the committee's decision?** (Layer 3 — FileTools)
-37. **What are our fund's position size limits?** (Layer 1 — should be in every agent's context)
-38. **What sector research do we have available?** (Layer 2 — RAG discovery)
-39. **Summarize all past investment decisions.** (Layer 3 — multi-memo retrieval)
-40. **What is our investment mandate?** (Layer 1 — system prompt context)
+35. **What does our research say about BTC price prediction events?** (Layer 2 — RAG)
+36. **Pull up our last BTC prediction memo.** (Layer 3 — FileTools)
+37. **What are our betting position limits?** (Layer 1 — should be in every agent's context)
+38. **What event categories do we cover?** (Layer 2 — RAG discovery)
+39. **Summarize all past prediction decisions.** (Layer 3 — multi-memo retrieval)
+40. **What is our prediction market mandate?** (Layer 1 — system prompt context)

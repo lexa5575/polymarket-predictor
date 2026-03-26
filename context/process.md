@@ -1,19 +1,30 @@
-# Investment Process
+# Prediction Process
 
 ## Evaluation Pipeline
-1. **Market Assessment** — Macro environment and sector outlook
-2. **Fundamental Analysis** — Company financials, valuation, growth
-3. **Technical Analysis** — Price action, momentum, entry timing
-4. **Risk Assessment** — Downside scenarios, position sizing, mandate compliance
-5. **Investment Memo** — Formal write-up with recommendation
-6. **Committee Decision** — Final vote: BUY / HOLD / PASS with dollar allocation
+1. **Event Scan** — Polymarket Agent scans active crypto markets, extracts odds and liquidity
+2. **Data Collection** (parallel):
+   - Market Data Agent — crypto prices, funding rates, open interest, Fear & Greed index
+   - News Agent — sentiment from X/Twitter, news, narratives (Grok + Exa search)
+3. **Risk Assessment** — Risk Agent evaluates edge, recommends side (YES/NO), rates risk
+4. **Position Sizing** — Deterministic step: Kelly criterion, slippage estimate, entry price
+5. **Decision** — Decision Agent: BET YES / BET NO / SKIP with stake and exit conditions
+6. **Logging** — If BET: record paper trade in DB + write audit memo. If SKIP: trace only.
 
 ## Decision Framework
-- **BUY:** Strong conviction across fundamentals + technicals, acceptable risk profile
-- **HOLD:** Existing position, no action needed at this time
-- **PASS:** Insufficient conviction, unacceptable risk, or mandate violation
+- **BET YES:** Positive edge on YES outcome, acceptable risk, sufficient liquidity
+- **BET NO:** Positive edge on NO outcome, acceptable risk, sufficient liquidity
+- **SKIP:** Insufficient edge (<5%), unacceptable risk, poor liquidity, or mandate violation
+
+## Execution Model
+- YES bet: buy YES token at best_ask + slippage. PnL if won = stake × (1/entry_price − 1).
+- NO bet: buy NO token at best_ask + slippage. PnL if won = stake × (1/entry_price − 1).
+- Loss in both cases: −stake.
 
 ## Documentation
-Every investment decision must be documented in a formal memo that includes:
-thesis, market context, financial analysis, technical analysis, risk assessment,
-position sizing rationale, and the committee's final decision.
+Every BET decision is recorded with: event question, condition_id, side, estimated
+probability, market probability, edge, stake, entry price, rationale, exit conditions,
+and confidence level. SKIP decisions are logged as trace events only.
+
+## Source of Truth
+- **PostgreSQL paper_trades table** = operational source of truth for all trades
+- **memos/ directory** = human-readable audit artifacts (read-only after creation)

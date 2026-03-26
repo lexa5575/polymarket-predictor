@@ -4,241 +4,99 @@ This file provides context for Claude Code when working with this repository.
 
 ## Project Overview
 
-Agentic Investment Team — A multi-agent system built with Agno that simulates a professional investment team deploying $10M into public equities. Demonstrates 5 multi-agent architectures, three-layer knowledge, and institutional learning.
+**Polymarket Predictor** — A multi-agent system built on Agno that analyzes crypto prediction markets on Polymarket and produces BET YES / BET NO / SKIP recommendations with Kelly-based position sizing. Phase 1: paper trading only.
 
 ## Architecture
 
 ```
 AgentOS (app/main.py)
-├── Agents (7 reusable specialists)
-│   ├── Market Analyst          — macro trends, sector analysis, news (Exa + YFinance)
-│   ├── Financial Analyst       — fundamentals, valuation, financials (YFinance)
-│   ├── Technical Analyst       — price action, momentum, entry/exit (YFinance)
-│   ├── Risk Officer            — downside scenarios, portfolio exposure (YFinance)
-│   ├── Knowledge Agent         — research library (RAG) + memo archive (FileTools)
-│   ├── Memo Writer             — synthesizes analysis into formal memos (FileTools)
-│   └── Committee Chair         — final decisions, capital allocation (Gemini 3.1 Pro)
+├── Agents (7+1 specialists)
+│   ├── Polymarket Scanner      — batch scan for crypto markets (GPT-4o-mini)
+│   ├── Polymarket Agent        — single market details + orderbooks (GPT-4o-mini)
+│   ├── Market Data Agent       — CoinGecko + Coinglass + Fear&Greed (GPT-4o-mini)
+│   ├── News Agent              — sentiment from X/Twitter + web (Grok via xAI)
+│   ├── Risk Agent              — probability estimation + risk rating (GPT-4o)
+│   ├── Knowledge Agent         — RAG research + memo archive (GPT-4o-mini)
+│   ├── Logger Agent            — audit memos only, no DB writes (GPT-4o-mini)
+│   └── Decision Agent          — BET/SKIP with stake (GPT-4o, workflow-only)
 │
-├── Teams (4 architectures)
-│   ├── Coordinate Team         — Chair orchestrates analysts dynamically
-│   ├── Route Team              — routes questions to the right specialist
-│   ├── Broadcast Team          — all analysts evaluate simultaneously
-│   └── Task Team               — autonomous task decomposition
+├── Teams (4 analytical-only architectures)
+│   ├── Coordinate Team         — dynamic orchestration
+│   ├── Route Team              — single-agent dispatch
+│   ├── Broadcast Team          — parallel evaluation
+│   └── Task Team               — autonomous decomposition
+│   NOTE: Teams are analytical only. All BET/SKIP decisions go through the workflow.
 │
-├── Workflows (1 architecture)
-│   └── Investment Workflow     — deterministic pipeline with parallel steps
+├── Workflow
+│   └── Prediction Pipeline     — Event Scan → Data+News → Risk → Sizing → Decision → Record
+│       ├── compute_position_sizing (deterministic: Kelly, slippage, entry price)
+│       └── conditional_logging (sole DB writer for paper trades)
 │
-├── Three-Layer Knowledge
-│   ├── Layer 1: Static Context     — mandate, risk policy, process (always in prompt)
-│   ├── Layer 2: Research Library   — company profiles, sector analysis (PgVector RAG)
-│   └── Layer 3: Memo Archive       — past investment memos (FileTools)
+├── Custom Routes
+│   ├── POST /api/scan-and-fanout  — batch scan + fan-out workflow runs
+│   ├── POST /api/settle           — check resolved markets, update trades
+│   └── GET  /api/dashboard        — bankroll snapshot + open positions
 │
-└── Institutional Learning          — patterns, corrections, insights (LearningMachine)
+├── Schemas (Pydantic contracts)
+│   ├── EventCandidate, BatchScanResult, MarketSnapshot, SentimentReport
+│   ├── RiskAssessment, BetDecision
+│   └── PaperTrade, BankrollSnapshot, PredictionRequest
+│
+├── Storage (deterministic, no LLM)
+│   ├── PaperTradeStore — CRUD for paper trades (sole DB owner)
+│   ├── math_utils      — Kelly, Brier Score, PnL, slippage
+│   └── SQLAlchemy ORM  — paper_trades + bankroll_snapshots tables
+│
+└── Three-Layer Knowledge
+    ├── Layer 1: Static Context   — mandate, risk policy, process (always in prompt)
+    ├── Layer 2: Research Library  — crypto event templates, strategies (PgVector RAG)
+    └── Layer 3: Memo Archive     — past prediction memos (FileTools, audit only)
 ```
 
-All specialist agents use:
-- Gemini 3 Flash model (`gemini-3-flash-preview`)
-- PostgreSQL database (pgvector) for persistence
-- Committee context (Layer 1) in system prompt
-- Shared knowledge base (Layer 2) for RAG
-- Shared learnings (institutional learning)
+## Key Design Decisions
 
-Committee Chair and team leaders use:
-- Gemini 3.1 Pro model (`gemini-3.1-pro-preview`)
-
-## Key Files
-
-| File | Purpose |
-|------|---------|
-| `app/main.py` | AgentOS entry point, registers all agents/teams/workflows |
-| `app/load_knowledge.py` | Loads research documents into PgVector (run once) |
-| `app/config.yaml` | Quick prompts for each agent, team, and workflow |
-| `agents/settings.py` | Shared instances: knowledge, learnings, paths, URLs |
-| `agents/market_analyst.py` | Market Analyst — Exa MCP + YFinance |
-| `agents/financial_analyst.py` | Financial Analyst — YFinance |
-| `agents/technical_analyst.py` | Technical Analyst — YFinance |
-| `agents/risk_officer.py` | Risk Officer — YFinance |
-| `agents/knowledge_agent.py` | Knowledge Agent — RAG + FileTools |
-| `agents/memo_writer.py` | Memo Writer — FileTools (save) |
-| `agents/committee_chair.py` | Committee Chair — Gemini 3.1 Pro, no tools |
-| `teams/coordinate_team.py` | Coordinate team (dynamic orchestration) |
-| `teams/route_team.py` | Route team (single dispatch) |
-| `teams/broadcast_team.py` | Broadcast team (parallel evaluation) |
-| `teams/task_team.py` | Task team (autonomous decomposition) |
-| `workflows/investment_workflow.py` | Deterministic 5-step pipeline |
-| `context/loader.py` | Loads `*.md` context files into `COMMITTEE_CONTEXT` |
-| `context/mandate.md` | Fund rules: $10M, public equities, limits |
-| `context/risk_policy.md` | Position sizing, portfolio risk, rebalancing |
-| `context/process.md` | 6-step evaluation pipeline |
-| `db/session.py` | `get_postgres_db()` and `create_knowledge()` helpers |
-| `db/url.py` | Builds database URL from environment |
-| `compose.yaml` | Local development with Docker |
-
-## Development Setup
-
-### Virtual Environment
-
-```bash
-./scripts/venv_setup.sh
-source .venv/bin/activate
-```
-
-### Format & Validation
-
-```bash
-source .venv/bin/activate && ./scripts/format.sh
-source .venv/bin/activate && ./scripts/validate.sh
-```
-
-## Conventions
-
-### Agent Pattern
-
-All agents follow this structure:
-
-```python
-from agno.agent import Agent
-from agno.models.google import Gemini
-from agno.learn import LearningMachine, LearnedKnowledgeConfig, LearningMode
-
-from context import COMMITTEE_CONTEXT
-from agents.settings import team_knowledge, team_learnings
-from db import get_postgres_db
-
-agent_db = get_postgres_db()
-
-instructions = f"""\
-You are the [Role] on a $10M investment team.
-
-## Committee Rules (ALWAYS FOLLOW)
-
-{COMMITTEE_CONTEXT}
-
-## Your Role
-[Role-specific instructions...]
-"""
-
-my_agent = Agent(
-    id="my-agent",
-    name="My Agent",
-    model=Gemini(id="gemini-3-flash-preview"),
-    db=agent_db,
-    instructions=instructions,
-    tools=[...],
-    knowledge=team_knowledge,
-    search_knowledge=True,
-    learning=LearningMachine(
-        knowledge=team_learnings,
-        learned_knowledge=LearnedKnowledgeConfig(
-            mode=LearningMode.AGENTIC,
-            namespace="global",
-        ),
-    ),
-    add_datetime_to_context=True,
-    add_history_to_context=True,
-    num_history_runs=5,
-    markdown=True,
-    enable_agentic_memory=True,
-)
-```
-
-### Critical Rules
-
-1. **Never duplicate knowledge instances** — always import from `agents.settings`
-2. **All instructions include `COMMITTEE_CONTEXT`** via f-string (Layer 1)
-3. **Gemini Pro for Chair/team leaders, Gemini Flash for specialists**
-4. **Memos = files (FileTools), Research = vectors (PgVector)** — never mix
-5. **`committee_chair` is NOT a member** of Coordinate/Broadcast/Task teams (the team `model=` acts as chair). It IS a member of Route team and the final Workflow step.
-6. **No learning config** on: Memo Writer, Committee Chair, Knowledge Agent, Route team
-7. **Agent IDs are kebab-case** and match `config.yaml` keys
-8. **`skip_if_exists=True`** on research loading to prevent re-indexing
-
-### Database
-
-- Use `get_postgres_db()` from `db` module
-- Knowledge bases use `create_knowledge()` from `db` module
-- The `contents_table` parameter is only needed when provided to a Knowledge base
-
-```python
-# Shared knowledge instances (import from agents.settings)
-from agents.settings import team_knowledge, team_learnings
-
-# Agent database (no contents_table needed)
-agent_db = get_postgres_db()
-```
-
-### Imports
-
-```python
-# Database
-from db import db_url, get_postgres_db, create_knowledge
-
-# Context
-from context import COMMITTEE_CONTEXT
-
-# Shared settings
-from agents.settings import team_knowledge, team_learnings, MEMOS_DIR, EXA_MCP_URL
-
-# Agents
-from agents import (
-    market_analyst, financial_analyst, technical_analyst,
-    risk_officer, knowledge_agent, memo_writer, committee_chair,
-)
-
-# Teams
-from teams import coordinate_team, route_team, broadcast_team, task_team
-
-# Workflows
-from workflows import investment_workflow
-```
-
-## Commands
-
-```bash
-# Setup virtual environment
-./scripts/venv_setup.sh
-source .venv/bin/activate
-
-# Local development with Docker
-docker compose up -d --build
-
-# Load research into knowledge base
-python -m app.load_knowledge
-python -m app.load_knowledge --recreate  # Drop and reload
-
-# Format & validation
-./scripts/format.sh
-./scripts/validate.sh
-
-# Generate requirements
-./scripts/generate_requirements.sh
-```
+1. **decision_agent is workflow-internal** — not registered in production AgentOS, only in dev mode
+2. **Teams are analytical only** — never produce BET/SKIP decisions or stake sizes
+3. **conditional_logging is the sole DB writer** — paper trades go through it exclusively
+4. **Math is deterministic** — Kelly, Brier, PnL, slippage computed in Python, never by LLM
+5. **Source of truth**: PostgreSQL paper_trades table. `memos/` = read-only audit artifacts
+6. **Structured handoff**: workflow function steps use tagged JSON blocks, not regex on text
 
 ## Environment Variables
 
 Required:
-- `GOOGLE_API_KEY` — for Gemini models and embeddings
+- `OPENAI_API_KEY` — for GPT-4o / GPT-4o-mini models
+- `XAI_API_KEY` — for Grok (News Agent)
 - `EXA_API_KEY` — for Exa web search
 
 Optional:
-- `PARALLEL_API_KEY` — for ParallelTools web search
-- `RUNTIME_ENV` — set to `dev` for auto-reload
+- `COINGLASS_API_KEY` — for derivatives data (graceful degradation without it)
+- `XAI_MODEL_ID` — override Grok model (default: grok-2-latest)
+- `RUNTIME_ENV=dev` — enables hot-reload + registers decision_agent in UI
 - `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASS`, `DB_DATABASE`
 
-## Ports
+## Commands
 
-- API: 8000
-- Database: 5432
+```bash
+# Docker development
+docker compose up -d --build
 
-## Data Storage
+# Load knowledge base
+python -m app.load_knowledge --recreate
 
-| What | Layer | Storage | Table/Location |
-|------|-------|---------|----------------|
-| Investment mandate, risk policy | Layer 1 | Filesystem → prompt | `context/*.md` |
-| Company research, sector analysis | Layer 2 | PgVector | `team_knowledge` |
-| Research document contents | Layer 2 | PostgreSQL | `team_knowledge_contents` |
-| Past investment memos | Layer 3 | Filesystem | `memos/*.md` |
-| Discovered patterns, corrections | Learning | PgVector | `team_learnings` |
-| Learning contents | Learning | PostgreSQL | `team_learnings_contents` |
-| Session history | — | PostgreSQL | Automatic (Agno) |
-| Agent memory | — | PostgreSQL | Automatic (Agno) |
+# Run API server
+python -m app.main
+
+# Run tests
+pytest tests/test_math_utils.py tests/test_paper_trade.py tests/test_workflow_functions.py
+pytest tests/test_tools_unit.py tests/test_routes.py
+pytest tests/test_tools_live.py -m live  # optional, requires network
+```
+
+## Conventions
+
+- **Agent IDs are kebab-case** and match `config.yaml` keys
+- **Never duplicate knowledge instances** — import from `agents.settings`
+- **All instructions include `COMMITTEE_CONTEXT`** via f-string (Layer 1)
+- **GPT-4o for reasoning agents**, GPT-4o-mini for data agents, Grok for News
+- **Polymarket IDs**: `condition_id` = primary key, `token_id` = CLOB API, `gamma_market_id` = Gamma API

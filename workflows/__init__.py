@@ -1,1 +1,1 @@
-from workflows.investment_workflow import investment_workflow
+from workflows.prediction_workflow import prediction_workflow

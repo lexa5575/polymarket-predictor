@@ -1,22 +1,33 @@
 # Risk Policy
 
 ## Position Limits
-- Maximum single position: 30% of fund ($3M)
-- Minimum position size: 2% of fund ($200K)
-- For stocks with beta > 1.5: maximum 15% of fund ($1.5M)
+- Maximum single bet: 20% of bankroll ($2,000)
+- Minimum bet size: 2% of bankroll ($200)
+- Maximum 3 bets on correlated events (same underlier_group)
 
-## Position Sizing Guidelines
-- High conviction: 15-25% of fund ($1.5M - $2.5M)
-- Standard: 5-15% of fund ($500K - $1.5M)
-- Exploratory: 2-5% of fund ($200K - $500K)
+## Position Sizing — Kelly Criterion
+- Use **fractional Kelly (0.25x)** for conservative sizing
+- Kelly f* = (p × b − q) / b, where p = estimated_prob, b = (1/market_prob) − 1
+- Apply 0.25 multiplier to raw Kelly for actual stake
+- Never exceed maximum single bet limit regardless of Kelly output
+
+## Conviction Tiers
+- High conviction (edge > 15%): up to 15-20% of bankroll
+- Standard (edge 10-15%): up to 5-15% of bankroll
+- Exploratory (edge 5-10%): up to 2-5% of bankroll
 
 ## Portfolio Risk
-- Maximum portfolio beta: 1.5
-- Maximum drawdown tolerance: 20%
-- Correlation limit: no two positions with correlation > 0.85
+- Circuit breaker: if bankroll drops below 50% of starting ($5,000) → pause all new bets
+- Maximum total capital at risk: 60% of bankroll across all open positions
+- Correlation limit: no more than 3 open bets in the same underlier_group
+
+## Liquidity & Execution
+- Do not bet if bid-ask spread > 5%
+- Slippage budget: maximum 2% of stake amount
+- Entry price = best_ask + estimated_slippage (walk the orderbook)
+- For NO side: entry price = no_token best_ask + estimated_slippage
 
 ## Rebalancing
-- Quarterly full review
-- Monthly risk monitoring
-- Trim any position that grows beyond 35% due to appreciation
-- Exit any position that hits 25% loss from entry
+- Review all open positions every 4 hours (automated scan)
+- Settlement check every 12 hours
+- Exit conditions from Decision Agent are monitored continuously

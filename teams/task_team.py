@@ -3,42 +3,42 @@ Task Team
 ---------
 
 Chair autonomously decomposes complex tasks with dependencies.
-Best for: multi-step portfolio construction and analysis.
+Best for: multi-step prediction analysis and batch evaluations.
 """
 
 from agno.learn import LearnedKnowledgeConfig, LearningMachine, LearningMode
-from agno.models.google import Gemini
+from agno.models.openai import OpenAIChat
 from agno.team import Team, TeamMode
 
 from agents import (
-    financial_analyst,
     knowledge_agent,
-    market_analyst,
-    memo_writer,
-    risk_officer,
-    technical_analyst,
+    logger_agent,
+    market_data_agent,
+    news_agent,
+    polymarket_agent,
+    risk_agent,
 )
 from agents.settings import team_learnings
 
 task_team = Team(
     id="task-team",
-    name="Investment Team - Tasks",
+    name="Crypto Team - Tasks",
     mode=TeamMode.tasks,
-    model=Gemini(id="gemini-3.1-pro-preview"),
+    model=OpenAIChat(id="gpt-4o"),
     members=[
-        market_analyst,
-        financial_analyst,
-        technical_analyst,
-        risk_officer,
+        polymarket_agent,
+        market_data_agent,
+        news_agent,
+        risk_agent,
         knowledge_agent,
-        memo_writer,
+        logger_agent,
     ],
     instructions=[
-        "Decompose complex investment tasks into sub-tasks with dependencies.",
-        "Assign each sub-task to the most appropriate analyst.",
-        "Parallelize independent tasks (e.g., fundamentals + technicals).",
-        "Ensure risk assessment happens after fundamental + technical analysis.",
-        "Memo writing should be the final step after all analysis is complete.",
+        "Decompose complex prediction tasks into sub-tasks with dependencies.",
+        "Assign each sub-task to the most appropriate agent.",
+        "Parallelize independent tasks (e.g., market data + news sentiment).",
+        "Ensure risk assessment happens after data collection is complete.",
+        "Logging should be the final step after all analysis is complete.",
     ],
     learning=LearningMachine(
         knowledge=team_learnings,

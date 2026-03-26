@@ -1,5 +1,5 @@
 [project]
-name = "investment-team"
+name = "polymarket-predictor"
 version = "1.0.0"
 requires-python = ">=3.12,<4"
 readme = "README.md"
@@ -7,26 +7,26 @@ license-files = ["LICENSE"]
 authors = [{ name = "Agno", email = "hello@agno.com" }]
 
 dependencies = [
-  "agno",
+  "agno[scheduler]",
   "fastapi[standard]",
-  "google-genai",
+  "openai",
+  "httpx",
   "mcp",
   "pgvector",
   "psycopg[binary]",
   "sqlalchemy",
-  "yfinance",
-  # "parallel-web",  # Optional: uncomment if using ParallelTools
+  "pydantic>=2.0",
 ]
 
 [project.optional-dependencies]
-dev = ["mypy", "ruff"]
+dev = ["mypy", "ruff", "pytest", "pytest-asyncio", "httpx"]
 
 [build-system]
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["agents*", "context*", "db*", "app*", "teams*", "workflows*"]
+include = ["agents*", "context*", "db*", "app*", "teams*", "workflows*", "tools*", "schemas*", "storage*"]
 
 [tool.ruff]
 line-length = 120
@@ -43,8 +43,11 @@ plugins = ["pydantic.mypy"]
 exclude = [".venv*"]
 
 [[tool.mypy.overrides]]
-module = ["pgvector.*", "setuptools.*", "agno.*", "httpx.*", "yfinance.*", "google.*"]
+module = ["pgvector.*", "setuptools.*", "agno.*", "httpx.*"]
 ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+markers = ["live: requires network access (deselect with '-m not live')"]
 
 [tool.uv.pip]
 no-annotate = true

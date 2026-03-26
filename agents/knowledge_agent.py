@@ -3,12 +3,12 @@ Knowledge Agent
 ---------------
 
 Team librarian with two retrieval modes:
-- Research Library (vector search / RAG) for company and sector research
-- Memo Archive (file navigation) for past investment memos
+- Research Library (vector search / RAG) for crypto event analysis and strategies
+- Memo Archive (file navigation) for past prediction memos
 """
 
 from agno.agent import Agent
-from agno.models.google import Gemini
+from agno.models.openai import OpenAIChat
 from agno.tools.file import FileTools
 
 from agents.settings import MEMOS_DIR, team_knowledge
@@ -18,10 +18,10 @@ from db import get_postgres_db
 agent_db = get_postgres_db()
 
 instructions = f"""\
-You are the Knowledge Agent on a $10M investment team. You serve as the
+You are the Knowledge Agent on a crypto prediction team. You serve as the
 team's librarian with two retrieval capabilities.
 
-## Committee Rules (ALWAYS FOLLOW)
+## Team Rules (ALWAYS FOLLOW)
 
 {COMMITTEE_CONTEXT}
 
@@ -30,34 +30,32 @@ team's librarian with two retrieval capabilities.
 You have two retrieval modes:
 
 ### Mode A — Research Library (Vector Search / RAG)
-When asked about companies or sectors, search the knowledge base automatically.
-This contains company research profiles and sector analysis documents loaded
-via PgVector hybrid search. Good for questions like:
-- "What does our research say about NVDA's competitive moat?"
-- "What's the outlook for the AI semiconductor sector?"
+When asked about crypto events, strategies, or base rates, search the knowledge
+base automatically. This contains event analysis templates and strategy documents
+loaded via PgVector hybrid search. Good for questions like:
+- "What's our analysis framework for BTC price events?"
+- "How does Kelly Criterion work for prediction markets?"
+- "What are base rates for ETF approval events?"
 
 ### Mode B — Memo Archive (File Navigation)
-When asked about past memos or historical decisions, use FileTools to list,
-search, and read memo files. Memos are structured documents that should be
-read in full — never summarize from fragments. Good for questions like:
-- "Pull up our last NVDA memo"
-- "What did we decide about TSLA last quarter?"
+When asked about past decisions or memos, use FileTools to list, search, and
+read memo files. Memos are structured audit artifacts. Good for questions like:
+- "What did we decide on the last BTC $100K prediction?"
 - "What past memos do we have on file?"
+- "Show me our track record on ETF-related bets"
 
 ## Guidelines
-
-- For company/sector questions: rely on the automatic knowledge base search
-- For past memos/decisions: use list_files, search_files, and read_file
+- For event/strategy questions: rely on automatic knowledge base search
+- For past decisions/memos: use list_files, search_files, and read_file
 - Always read memos completely — never summarize from fragments
 - Provide specific citations with filenames and dates
-- Surface relevant historical precedents when they exist
 - If information isn't available, say so clearly
 """
 
 knowledge_agent = Agent(
     id="knowledge-agent",
     name="Knowledge Agent",
-    model=Gemini(id="gemini-3-flash-preview"),
+    model=OpenAIChat(id="gpt-4o-mini"),
     db=agent_db,
     instructions=instructions,
     tools=[
@@ -78,3 +76,9 @@ knowledge_agent = Agent(
     markdown=True,
     enable_agentic_memory=True,
 )
+
+if __name__ == "__main__":
+    knowledge_agent.print_response(
+        "What past memos do we have on file?",
+        stream=True,
+    )

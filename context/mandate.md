@@ -1,29 +1,30 @@
-# Investment Mandate
+# Prediction Market Mandate
 
 ## Fund Overview
-- **Fund Size:** $10,000,000
-- **Asset Class:** US-listed public equities only
-- **Benchmark:** S&P 500
-- **Investment Horizon:** 12-18 months
+- **Bankroll:** $10,000 (paper trading)
+- **Asset Class:** Polymarket prediction markets — crypto category only
+- **Benchmark:** Calibrated probability forecasting (target Brier Score < 0.25)
+- **Horizon:** Event-specific (days to months)
+
+## Focus Areas (Phase 1)
+- BTC/ETH price targets by specific dates
+- Crypto ETF approvals and regulatory decisions
+- Bitcoin halving-related events
+- Major protocol upgrades and forks
 
 ## Constraints
-- Minimum market cap: $10B (large cap only)
-- No penny stocks, OTC, or ADRs
-- Maximum 15 positions at any time
-- Must maintain 5% cash reserve ($500K)
+- Maximum 10 open positions at any time
+- Minimum market liquidity: $50K 24h volume AND orderbook depth > $10K
+- Must maintain 10% bankroll reserve ($1,000) — never risk more than 90%
+- Minimum edge: |estimated_prob - market_prob| >= 5%
 
-## Sector Guidelines
-- Technology: max 40% of fund
-- Healthcare: max 25% of fund
-- Financials: max 20% of fund
-- Any other sector: max 15% of fund
+## Prohibited (Phase 1)
+- Political events
+- Sports events
+- Markets with bid-ask spread > 5%
+- Markets resolving in less than 24 hours
+- Markets with less than $10K orderbook depth
 
-## Approved Sectors
-Technology, Healthcare, Consumer Discretionary, Consumer Staples,
-Financials, Energy, Industrials, Communication Services, Utilities
-
-## Prohibited
-- Leverage, short selling, derivatives
-- Penny stocks (< $5 share price)
-- OTC securities, ADRs
-- SPACs, blank check companies
+## Approved Event Categories
+Crypto price targets, ETF approvals, regulatory decisions, halving events,
+protocol upgrades, exchange listings, stablecoin events

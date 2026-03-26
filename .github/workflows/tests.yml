@@ -1,4 +1,4 @@
-name: Validate
+name: Tests
 
 on:
   push:
@@ -10,7 +10,7 @@ env:
   UV_SYSTEM_PYTHON: 1
 
 jobs:
-  validate:
+  test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -33,11 +33,17 @@ jobs:
       - name: Install the project with dev dependencies
         run: uv sync --extra dev
 
-      - name: Format with ruff
-        run: uv run ruff format --check .
+      - name: Run math utils tests
+        run: uv run pytest tests/test_math_utils.py -v
 
-      - name: Lint with ruff
-        run: uv run ruff check .
+      - name: Run paper trade tests
+        run: uv run pytest tests/test_paper_trade.py -v
 
-      - name: Type-check with mypy
-        run: uv run mypy .
+      - name: Run workflow function tests
+        run: uv run pytest tests/test_workflow_functions.py -v
+
+      - name: Run tool unit tests (mocked, no network)
+        run: uv run pytest tests/test_tools_unit.py -v
+
+      - name: Run route tests
+        run: uv run pytest tests/test_routes.py -v

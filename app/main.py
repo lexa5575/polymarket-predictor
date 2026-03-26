@@ -1,8 +1,8 @@
 """
-Agentic Investment Team
------------------------------
+Polymarket Predictor
+--------------------
 
-A multi-agent investment team demonstrating 5 architectures.
+A multi-agent system for crypto prediction markets on Polymarket.
 
 Run:
     python -m app.main
@@ -14,43 +14,57 @@ from pathlib import Path
 from agno.os import AgentOS
 
 from agents import (
-    committee_chair,
-    financial_analyst,
     knowledge_agent,
-    market_analyst,
-    memo_writer,
-    risk_officer,
-    technical_analyst,
+    logger_agent,
+    market_data_agent,
+    news_agent,
+    polymarket_agent,
+    polymarket_scanner,
+    risk_agent,
 )
+from app.routes import router
 from db import get_postgres_db
 from teams import broadcast_team, coordinate_team, route_team, task_team
-from workflows import investment_workflow
+from workflows import prediction_workflow
+
+IS_DEBUG = os.getenv("RUNTIME_ENV", "") == "dev"
 
 # ---------------------------------------------------------------------------
 # Create AgentOS
 # ---------------------------------------------------------------------------
+
+# Public agents — visible in UI and directly callable
+_agents = [
+    polymarket_scanner,
+    polymarket_agent,
+    market_data_agent,
+    news_agent,
+    risk_agent,
+    knowledge_agent,
+    logger_agent,
+]
+
+# decision_agent is internal to the prediction workflow.
+# Only register it in AgentOS when running in debug/dev mode.
+if IS_DEBUG:
+    from agents import decision_agent
+    _agents.append(decision_agent)
+
 agent_os = AgentOS(
-    name="Agentic Investment Team",
+    name="Polymarket Predictor",
     tracing=True,
     scheduler=True,
+    scheduler_poll_interval=15,
     db=get_postgres_db(),
-    agents=[
-        market_analyst,
-        financial_analyst,
-        technical_analyst,
-        risk_officer,
-        knowledge_agent,
-        memo_writer,
-        committee_chair,
-    ],
+    agents=_agents,
     teams=[coordinate_team, route_team, broadcast_team, task_team],
-    workflows=[investment_workflow],
+    workflows=[prediction_workflow],
     config=str(Path(__file__).parent / "config.yaml"),
 )
 
 app = agent_os.get_app()
+app.include_router(router, prefix="/api")
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8000"))
-    reload = os.getenv("RUNTIME_ENV", "") == "dev"
-    agent_os.serve(app="app.main:app", port=port, reload=reload)
+    agent_os.serve(app="app.main:app", port=port, reload=IS_DEBUG)

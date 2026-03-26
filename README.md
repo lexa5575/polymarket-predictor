@@ -1,50 +1,58 @@
-# Multi-Agent Investment Team
+# Polymarket Predictor
 
-Multi-agent investment team powered by Agno and Gemini — 7 AI analysts collaborate across 5 architectures to deploy a $10M equity portfolio
+Polymarket Predictor is a multi-agent system built on Agno/AgentOS for analyzing crypto prediction markets on Polymarket. It produces structured `BET YES` / `BET NO` / `SKIP` recommendations with deterministic sizing, paper-trade recording, and audit memos.
+
+Phase 1 is analytics plus paper trading only.
 
 ## Architecture
 
-```
+```text
 AgentOS
-├── Agents (7)
-│   ├── Market Analyst        ── Exa web search + YFinance
-│   ├── Financial Analyst     ── YFinance fundamentals
-│   ├── Technical Analyst     ── YFinance technicals
-│   ├── Risk Officer          ── YFinance + mandate enforcement
-│   ├── Knowledge Agent       ── RAG search + memo file navigation
-│   ├── Memo Writer           ── Writes investment memos to disk
-│   └── Committee Chair       ── Final decision-maker (Gemini 3.1 Pro)
+├── Agents
+│   ├── Polymarket Scanner   ── batch market scan
+│   ├── Polymarket Agent     ── single-market details + orderbooks
+│   ├── Market Data Agent    ── CoinGecko + Coinglass + Fear & Greed
+│   ├── News Agent           ── Grok + Exa sentiment/news
+│   ├── Risk Agent           ── qualitative risk + side recommendation
+│   ├── Knowledge Agent      ── RAG over research + memo archive
+│   ├── Logger Agent         ── audit memos only
+│   └── Decision Agent       ── workflow-internal final decision
 │
-├── Teams (4)
-│   ├── Coordinate Team       ── Dynamic multi-agent orchestration
-│   ├── Route Team            ── Single-agent dispatch
-│   ├── Broadcast Team        ── Parallel independent evaluation
-│   └── Task Team             ── Autonomous task decomposition
+├── Teams (analytical only)
+│   ├── Coordinate Team
+│   ├── Route Team
+│   ├── Broadcast Team
+│   └── Task Team
 │
-└── Workflow (1)
-    └── Investment Pipeline   ── Market → Financial+Technical → Risk → Memo → Chair
+└── Workflow
+    └── Prediction Pipeline  ── Scan → Data+News → Risk → Sizing → Decision → Record
 ```
 
-### Three-Layer Knowledge
+## Key Rules
 
-| Layer | What | How |
-|-------|------|-----|
-| **Static Context** | Fund mandate, risk policy, evaluation process | Injected into every agent's system prompt via `context/` |
-| **Research Library** | Company profiles, sector analyses | PgVector hybrid search (RAG) via `research/` |
-| **Memo Archive** | Past investment memos and decisions | File-based navigation via `memos/` |
+- Teams are analytical only. Final actionable `BET/SKIP` decisions go through the workflow.
+- `conditional_logging()` is the sole writer to `paper_trades`.
+- Kelly, slippage, entry price, PnL, and Brier Score are deterministic Python logic, not LLM output.
+- Phase 1 does not place real trades.
 
 ## Quick Start
 
 ### 1. Clone and configure
 
 ```sh
-git clone https://github.com/agno-agi/investment-team.git investment-team
-cd investment-team
+git clone <your-repo-url> polymarket-predictor
+cd polymarket-predictor
 
 cp example.env .env
-# Edit .env and add your API keys
-# GOOGLE_API_KEY=***
-# EXA_API_KEY=*** # Optional -- Exa MCP is free (thank you!)
+```
+
+Fill in the keys you plan to use:
+
+```env
+OPENAI_API_KEY=...
+XAI_API_KEY=...
+EXA_API_KEY=...
+COINGLASS_API_KEY=...
 ```
 
 ### 2. Start services
@@ -53,223 +61,106 @@ cp example.env .env
 docker compose up -d --build
 ```
 
-This starts PostgreSQL (with pgvector) and the API server.
+This starts PostgreSQL with pgvector and the API server.
 
 ### 3. Load research into the knowledge base
 
 ```sh
-docker exec -it investment-team-api python -m app.load_knowledge
+docker exec -it polymarket-predictor-api python -m app.load_knowledge --recreate
 ```
 
-This loads company profiles and sector analyses into PgVector for RAG search. Only needs to run once — documents are skipped if they already exist.
+### 4. Open the UI
 
-### 4. Connect the UI
+1. Open [os.agno.com](https://os.agno.com)
+2. Add a local OS pointing to `http://localhost:8000`
+3. Connect
 
-1. Open [os.agno.com](https://os.agno.com) and sign in
-2. Click **Add OS** → **Local** → enter `http://localhost:8000`
-3. Click **Connect**
+## What To Run
 
-You'll see all 7 agents, 4 teams, and the workflow ready to use.
+### Full workflow
 
-## What to Try
+Use the workflow for real pipeline decisions:
 
-**Route a simple question** (Route Team):
-```
-What's AAPL's P/E ratio?
-```
-
-**Run a full committee review** (Coordinate Team):
-```
-Should we invest in NVIDIA?
+```text
+Run full prediction analysis on the BTC $100K market
 ```
 
-**Get parallel analyst opinions** (Broadcast Team):
-```
-Full committee review: evaluate TSLA for $2M
-```
+### Analytical teams
 
-**Autonomous portfolio construction** (Task Team):
-```
-Deploy $10M across the top 5 AI stocks
+Use teams for research and synthesis, not for final execution:
+
+```text
+Analyze the BTC $100K prediction market — what's the edge?
 ```
 
-**Deterministic pipeline** (Investment Workflow):
-```
-Run full investment review on NVIDIA
-```
+### Useful API routes
 
-**Search the knowledge base** (Knowledge Agent):
-```
-What does our research say about semiconductors?
-```
-
-## Agents
-
-| Agent | Model | Tools | Purpose |
-|-------|-------|-------|---------|
-| Market Analyst | Gemini 3 Flash | Exa MCP, YFinance | Macro environment, news, market conditions |
-| Financial Analyst | Gemini 3 Flash | YFinance | Valuation, fundamentals, analyst estimates |
-| Technical Analyst | Gemini 3 Flash | YFinance | Price action, indicators, support/resistance |
-| Risk Officer | Gemini 3 Flash | YFinance | Position sizing, mandate compliance, risk limits |
-| Knowledge Agent | Gemini 3 Flash | FileTools (read-only) | RAG over research library + memo file browsing |
-| Memo Writer | Gemini 3 Flash | FileTools (read/write) | Drafts and saves standardized investment memos |
-| Committee Chair | Gemini 3.1 Pro | None | Final BUY/HOLD/PASS decisions with conviction scores |
-
-## Teams
-
-| Team | Mode | Members | Use Case |
-|------|------|---------|----------|
-| Coordinate | Dynamic orchestration | 6 analysts | Open-ended investment questions |
-| Route | Single dispatch | All 7 | Direct questions to the right specialist |
-| Broadcast | Parallel evaluation | 4 analysts | Independent assessments synthesized together |
-| Task | Autonomous decomposition | 6 analysts | Complex multi-step portfolio tasks |
-
-## Workflow
-
-The **Investment Review Pipeline** runs a deterministic 5-step process:
-
-```
-Market Assessment ──→ Deep Dive (parallel) ──→ Risk Assessment ──→ Investment Memo ──→ Committee Decision
-                      ├─ Fundamental Analysis
-                      └─ Technical Analysis
-```
-
-Each step's output feeds into the next, producing a complete investment memo with a final committee decision.
-
-## Project Structure
-
-```
-investment-team/
-├── agents/                     # 7 specialist agents
-│   ├── settings.py             # Shared knowledge instances (import, never recreate)
-│   ├── market_analyst.py
-│   ├── financial_analyst.py
-│   ├── technical_analyst.py
-│   ├── risk_officer.py
-│   ├── knowledge_agent.py
-│   ├── memo_writer.py
-│   └── committee_chair.py
-├── teams/                      # 4 team configurations
-│   ├── coordinate_team.py
-│   ├── route_team.py
-│   ├── broadcast_team.py
-│   └── task_team.py
-├── workflows/                  # Deterministic pipelines
-│   └── investment_workflow.py
-├── context/                    # Layer 1: Static context (system prompt)
-│   ├── mandate.md              # Fund rules and constraints
-│   ├── risk_policy.md          # Position and portfolio risk limits
-│   ├── process.md              # Evaluation pipeline and decision framework
-│   └── loader.py               # Reads *.md → COMMITTEE_CONTEXT string
-├── research/                   # Layer 2: Research library (PgVector RAG)
-│   ├── companies/              # 7 company profiles (NVDA, AAPL, MSFT, etc.)
-│   └── sectors/                # 2 sector analyses (AI semis, cloud)
-├── memos/                      # Layer 3: Memo archive (FileTools)
-│   ├── nvda_2025_q3_buy.md     # Seed memo: NVIDIA BUY
-│   └── tsla_2025_q2_pass.md    # Seed memo: Tesla PASS
-├── db/                         # Database helpers
-│   ├── session.py              # get_postgres_db(), create_knowledge()
-│   └── url.py                  # Builds DB URL from environment
-├── app/
-│   ├── main.py                 # AgentOS entry point
-│   └── config.yaml             # Quick prompts for the UI
-├── scripts/                    # Dev scripts
-├── compose.yaml                # Docker Compose (API + PostgreSQL)
-├── Dockerfile
-├── pyproject.toml
-└── requirements.txt
-```
-
-## Deploy to Railway
-
-```sh
-railway login
-
-./scripts/railway_up.sh
-```
-
-### Production Operations
-
-**Load research into knowledge base:**
-```sh
-railway run python -m app.load_knowledge
-```
-
-**View logs:**
-```sh
-railway logs --service investment-team
-```
-
-**Redeploy after changes:**
-```sh
-railway up --service investment-team -d
-```
-
-**Open dashboard:**
-```sh
-railway open
-```
+- `POST /api/scan-and-fanout`
+- `POST /api/settle`
+- `GET /api/dashboard`
 
 ## Local Development
 
 ```sh
-# Install uv (if needed)
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# install dependencies
+uv sync --extra dev
 
-# Setup virtual environment
-./scripts/venv_setup.sh
-source .venv/bin/activate
+# run tests
+uv run pytest tests/test_math_utils.py tests/test_paper_trade.py tests/test_workflow_functions.py
+uv run pytest tests/test_tools_unit.py tests/test_routes.py
 
-# Start PostgreSQL (required)
-docker compose up -d investment-team-db
+# optional live tests
+uv run pytest tests/test_tools_live.py -m live
 
-# Load research
-python -m app.load_knowledge
-
-# Run the app
-python -m app.main
+# run app locally
+uv run python -m app.main
 ```
 
-### Format and lint
+## Project Structure
 
-```sh
-source .venv/bin/activate
-./scripts/format.sh      # ruff format + ruff check --fix
-./scripts/validate.sh    # ruff check + mypy
+```text
+polymarket-predictor/
+├── agents/
+├── app/
+├── context/
+├── db/
+├── research/
+├── schemas/
+├── scripts/
+├── storage/
+├── teams/
+├── tests/
+├── tools/
+├── workflows/
+├── compose.yaml
+├── Dockerfile
+└── pyproject.toml
 ```
-
-### Load research
-
-```sh
-python -m app.load_knowledge            # Upsert (skip existing)
-python -m app.load_knowledge --recreate # Drop and reload all
-```
-
-### Add dependencies
-
-1. Edit `pyproject.toml`
-2. Regenerate lockfile: `./scripts/generate_requirements.sh`
-3. Rebuild: `docker compose up -d --build`
 
 ## Environment Variables
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `GOOGLE_API_KEY` | Yes | — | Gemini models + embeddings |
-| `EXA_API_KEY` | Yes | — | Web search for Market Analyst |
-| `PARALLEL_API_KEY` | No | — | ParallelTools for Market Analyst |
-| `RUNTIME_ENV` | No | `prd` | Set to `dev` for auto-reload |
-| `DB_HOST` | No | `localhost` | PostgreSQL host |
-| `DB_PORT` | No | `5432` | PostgreSQL port |
-| `DB_USER` | No | `ai` | PostgreSQL user |
-| `DB_PASS` | No | `ai` | PostgreSQL password |
-| `DB_DATABASE` | No | `ai` | PostgreSQL database name |
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `OPENAI_API_KEY` | Yes | GPT-4o / GPT-4o-mini |
+| `XAI_API_KEY` | Yes | Grok for the News Agent |
+| `EXA_API_KEY` | Yes | Exa MCP web search |
+| `COINGLASS_API_KEY` | No | Funding/OI data, graceful degradation if missing |
+| `XAI_MODEL_ID` | No | Override default Grok model |
+| `RUNTIME_ENV` | No | Set `dev` to expose the internal `decision_agent` in UI |
+| `DB_HOST` | No | PostgreSQL host |
+| `DB_PORT` | No | PostgreSQL port |
+| `DB_USER` | No | PostgreSQL user |
+| `DB_PASS` | No | PostgreSQL password |
+| `DB_DATABASE` | No | PostgreSQL database |
+
+## Deployment Notes
+
+- Docker image name: `polymarket-predictor`
+- Compose services: `polymarket-predictor-db`, `polymarket-predictor-api`
+- If you deploy to Railway or another platform, update the service name to `polymarket-predictor`
 
 ## Learn More
 
-- [Agno Github](https://github.com/agno-agi/agno)
+- [Agno GitHub](https://github.com/agno-agi/agno)
 - [Agno Documentation](https://docs.agno.com)
 - [AgentOS Documentation](https://docs.agno.com/agent-os/introduction)
-- [Multi-Agent Teams](https://docs.agno.com/teams)
-- [Tools & Integrations](https://docs.agno.com/tools/toolkits)
-- [Agno Discord](https://agno.com/discord)

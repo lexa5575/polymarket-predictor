@@ -30,7 +30,7 @@ if __name__ == "__main__":
 
     print(f"Loading research from: {RESEARCH_DIR}\n")
 
-    for subdir in ["companies", "sectors"]:
+    for subdir in ["events", "strategies"]:
         path = RESEARCH_DIR / subdir
         if not path.exists():
             print(f"  {subdir}/: (not found)")
