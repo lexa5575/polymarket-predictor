@@ -98,3 +98,7 @@ watchfiles==1.1.1
 websockets==15.0.1
 yarl==1.22.0
 yfinance==1.2.0
+
+# Added for polymarket-predictor
+openai>=1.0.0
+httpx>=0.25.0
