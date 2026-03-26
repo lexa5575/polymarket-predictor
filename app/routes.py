@@ -219,7 +219,7 @@ async def price_prediction(request: PricePredictionRequest):
 
     # 1. Get market data
     try:
-        market_response = market_data_agent.run(
+        market_response = await market_data_agent.arun(
             f"Get current {request.coin} price, funding rate, open interest, and Fear & Greed index. "
             f"Context: predicting whether {request.coin} will be {request.direction} "
             f"${request.price_target:,.0f} in {request.timeframe}."
@@ -231,7 +231,7 @@ async def price_prediction(request: PricePredictionRequest):
 
     # 2. Get sentiment
     try:
-        sentiment_response = news_agent.run(
+        sentiment_response = await news_agent.arun(
             f"What is the current sentiment for {request.coin} price "
             f"in the next {request.timeframe}? Any catalysts or risks that could move the price?"
         )
@@ -248,7 +248,7 @@ async def price_prediction(request: PricePredictionRequest):
     narratives = sentiment.get("key_narratives", [])
 
     try:
-        risk_response = risk_agent.run(
+        risk_response = await risk_agent.arun(
             f"Predict: Will {request.coin} be {request.direction} ${request.price_target:,.0f} "
             f"in the next {request.timeframe}?\n\n"
             f"Current price: ${current_price:,.0f}\n"
