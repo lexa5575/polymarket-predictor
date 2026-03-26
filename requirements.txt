@@ -102,3 +102,4 @@ yfinance==1.2.0
 # Added for polymarket-predictor
 openai>=1.0.0
 httpx>=0.25.0
+jiter>=0.5.0
