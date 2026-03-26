@@ -97,8 +97,9 @@ class PolymarketTools(Toolkit):
     def get_active_crypto_markets(self, limit: int = 20) -> str:
         """Get active crypto prediction markets from Polymarket.
 
-        Fetches active markets and post-filters for crypto category,
-        since the Gamma `tag` query param may not be reliable.
+        Uses the Gamma Events API with tag_slug=crypto-prices to access all
+        crypto price markets (5000+), not just the handful from /markets.
+        Also fetches general crypto events. Sorts by 24h volume descending.
 
         Args:
             limit: Maximum number of crypto markets to return (default 20).
@@ -106,46 +107,77 @@ class PolymarketTools(Toolkit):
         Returns:
             JSON string with list of active crypto markets.
         """
+        all_markets = []
+
+        # Source 1: Crypto price events (BTC/ETH/SOL price targets — thousands of markets)
+        for tag_slug in ["crypto-prices", "crypto"]:
+            try:
+                resp = httpx.get(
+                    f"{GAMMA_BASE}/events",
+                    params={
+                        "tag_slug": tag_slug,
+                        "active": "true",
+                        "closed": "false",
+                        "limit": "50",
+                    },
+                    timeout=20,
+                )
+                resp.raise_for_status()
+                events = resp.json()
+                if isinstance(events, list):
+                    for event in events:
+                        for m in event.get("markets", []):
+                            if not m.get("active", True) or m.get("closed", False):
+                                continue
+                            all_markets.append(m)
+            except Exception:
+                pass
+
+        # Source 2: General markets search (fallback)
         try:
-            # Fetch more than needed to account for post-filtering
-            fetch_limit = limit * 5
             resp = httpx.get(
                 f"{GAMMA_BASE}/markets",
-                params={
-                    "active": "true",
-                    "closed": "false",
-                    "limit": str(fetch_limit),
-                },
+                params={"active": "true", "closed": "false", "limit": "100"},
                 timeout=15,
             )
             resp.raise_for_status()
-            all_markets = resp.json()
-            if not isinstance(all_markets, list):
-                return json.dumps({"error": "Unexpected response format from Gamma API"})
+            markets = resp.json()
+            if isinstance(markets, list):
+                for m in markets:
+                    if _is_crypto_market(m):
+                        all_markets.append(m)
+        except Exception:
+            pass
 
-            # Post-filter for crypto
-            results = []
-            for m in all_markets:
-                if not _is_crypto_market(m):
-                    continue
-                token_ids = _normalize_token_ids(m.get("clobTokenIds"))
-                results.append({
-                    "gamma_market_id": m.get("id"),
-                    "condition_id": m.get("conditionId", ""),
-                    "question": m.get("question", ""),
-                    "slug": m.get("slug", ""),
-                    "end_date": m.get("endDate", ""),
-                    "volume_24h": m.get("volume24hr", 0),
-                    "liquidity": m.get("liquidity", 0),
-                    "clob_token_ids": token_ids,
-                    "outcome_prices": _normalize_outcome_prices(m.get("outcomePrices")),
-                })
-                if len(results) >= limit:
-                    break
+        # Deduplicate by conditionId
+        seen = set()
+        unique = []
+        for m in all_markets:
+            cid = m.get("conditionId", m.get("id", ""))
+            if cid and cid not in seen:
+                seen.add(cid)
+                unique.append(m)
 
-            return json.dumps(results, indent=2)
-        except Exception as e:
-            return json.dumps({"error": str(e)})
+        # Sort by 24h volume descending
+        unique.sort(key=lambda m: float(m.get("volume24hr", 0) or 0), reverse=True)
+
+        # Build results
+        results = []
+        for m in unique[:limit]:
+            token_ids = _normalize_token_ids(m.get("clobTokenIds"))
+            results.append({
+                "gamma_market_id": m.get("id"),
+                "condition_id": m.get("conditionId", ""),
+                "question": m.get("question", ""),
+                "slug": m.get("slug", ""),
+                "end_date": m.get("endDate", ""),
+                "volume_24h": float(m.get("volume24hr", 0) or 0),
+                "liquidity": float(m.get("liquidity", 0) or 0),
+                "clob_token_ids": token_ids,
+                "outcome_prices": _normalize_outcome_prices(m.get("outcomePrices")),
+            })
+
+        return json.dumps(results, indent=2)
 
     def get_market_by_id(self, gamma_market_id: str) -> str:
         """Get detailed market info by Gamma API market id.
