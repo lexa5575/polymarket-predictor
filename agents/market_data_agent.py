@@ -9,9 +9,9 @@ Tools: CoinGeckoTools, CoinglassTools, FearGreedTools.
 
 from agno.agent import Agent
 from agno.learn import LearnedKnowledgeConfig, LearningMachine, LearningMode
-from agno.models.openai import OpenAIChat
+from agno.models.xai import xAI
 
-from agents.settings import COINGLASS_API_KEY, team_knowledge, team_learnings
+from agents.settings import COINGLASS_API_KEY, XAI_MODEL_ID, team_knowledge, team_learnings
 from context import COMMITTEE_CONTEXT
 from db import get_postgres_db
 from schemas.market import MarketSnapshot
@@ -60,7 +60,7 @@ You aggregate crypto market data to provide context for prediction decisions.
 market_data_agent = Agent(
     id="market-data-agent",
     name="Market Data Agent",
-    model=OpenAIChat(id="gpt-4o-mini"),
+    model=xAI(id=XAI_MODEL_ID),
     db=agent_db,
     instructions=instructions,
     tools=[
@@ -68,7 +68,7 @@ market_data_agent = Agent(
         CoinglassTools(api_key=COINGLASS_API_KEY),
         FearGreedTools(),
     ],
-    output_schema=MarketSnapshot,
+    # No output_schema — xAI doesn't reliably support it; ensure_data_quality validates
     knowledge=team_knowledge,
     search_knowledge=True,
     learning=LearningMachine(
