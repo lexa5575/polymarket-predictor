@@ -431,7 +431,6 @@ def conditional_logging(step_input: StepInput) -> StepOutput:
 prediction_workflow = Workflow(
     id="prediction-workflow",
     name="Crypto Prediction Pipeline",
-    input_schema=PredictionRequest,
     steps=[
         Step(name="Event Scan", agent=polymarket_agent),
         Parallel(

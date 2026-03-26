@@ -16,7 +16,6 @@ from agents.settings import EXA_MCP_URL, XAI_MODEL_ID, team_knowledge, team_lear
 from context import COMMITTEE_CONTEXT
 from db import get_postgres_db
 from schemas.market import SentimentReport
-from schemas.market import SentimentReport
 
 agent_db = get_postgres_db()
 
