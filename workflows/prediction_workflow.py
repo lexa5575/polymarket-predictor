@@ -21,6 +21,7 @@ import logging
 import re
 
 from agno.workflow import Parallel, Step, Workflow
+from agno.workflow.types import StepInput, StepOutput
 
 from agents import (
     decision_agent,
@@ -57,6 +58,16 @@ _RECORD_TAG = "RECORD_RESULT"
 def _emit_tagged_block(tag: str, data: dict) -> str:
     """Wrap a dict as a tagged JSON block in the workflow context."""
     return f"<!-- {tag} -->{json.dumps(data)}<!-- /{tag} -->"
+
+
+def _sizing_output(sizing: dict) -> StepOutput:
+    """Wrap sizing dict as a StepOutput with tagged content."""
+    return StepOutput(content=_emit_tagged_block(_SIZING_TAG, sizing))
+
+
+def _record_output(result: dict) -> StepOutput:
+    """Wrap record result as a StepOutput with tagged content."""
+    return StepOutput(content=_emit_tagged_block(_RECORD_TAG, result))
 
 
 def _get_tagged_block(context: str, tag: str) -> dict | None:
@@ -108,13 +119,18 @@ def _extract_agent_json(context: str, key_marker: str) -> dict | None:
 # ---------------------------------------------------------------------------
 
 
-def compute_position_sizing(context: str, **kwargs) -> str:  # noqa: ARG001
+def compute_position_sizing(step_input: StepInput) -> StepOutput:
     """Deterministic sizing — computes Kelly, slippage, stake, entry price.
 
     Reads structured JSON from prior agent outputs:
     - RiskAssessment JSON (contains estimated_prob_of_side, market_prob_of_side, recommended_side)
     - EventCandidate JSON (contains yes_book, no_book with best_ask, depth_10pct)
     """
+    # Build context from StepInput
+    context = str(step_input.previous_step_content or "")
+    if step_input.input:
+        context = str(step_input.input) + "\n" + context
+
     # --- Extract RiskAssessment from agent output ---
     risk_data = _extract_agent_json(context, "estimated_prob_of_side")
     event_data = _extract_agent_json(context, "yes_book") or _extract_agent_json(context, "gamma_market_id")
@@ -152,7 +168,7 @@ def compute_position_sizing(context: str, **kwargs) -> str:  # noqa: ARG001
     if not (estimated_prob and market_prob and estimated_prob > market_prob):
         sizing["force_skip"] = True
         sizing["sizing_note"] = "No positive edge detected or data missing"
-        return _emit_tagged_block(_SIZING_TAG, sizing)
+        return _sizing_output(sizing)
 
     # --- Kelly Criterion ---
     raw_kelly = kelly_criterion(estimated_prob, market_prob)
@@ -165,7 +181,7 @@ def compute_position_sizing(context: str, **kwargs) -> str:  # noqa: ARG001
     if capped_stake < min_stake:
         sizing["force_skip"] = True
         sizing["sizing_note"] = f"Stake ${capped_stake:.2f} below minimum ${min_stake:.2f}"
-        return _emit_tagged_block(_SIZING_TAG, sizing)
+        return _sizing_output(sizing)
 
     # --- Extract orderbook for the recommended side ---
     best_ask = None
@@ -193,7 +209,7 @@ def compute_position_sizing(context: str, **kwargs) -> str:  # noqa: ARG001
             f"No valid orderbook for {recommended_side} side — "
             "cannot compute entry price or slippage safely"
         )
-        return _emit_tagged_block(_SIZING_TAG, sizing)
+        return _sizing_output(sizing)
 
     slippage = estimate_slippage(capped_stake, asks)
     entry_price = calculate_entry_price(best_ask, slippage)
@@ -207,7 +223,7 @@ def compute_position_sizing(context: str, **kwargs) -> str:  # noqa: ARG001
             f"Stake zeroed — mandate violation."
         )
         sizing["slippage_estimate"] = round(slippage, 4)
-        return _emit_tagged_block(_SIZING_TAG, sizing)
+        return _sizing_output(sizing)
 
     sizing.update({
         "kelly_fraction_raw": round(raw_kelly, 4),
@@ -218,7 +234,7 @@ def compute_position_sizing(context: str, **kwargs) -> str:  # noqa: ARG001
         "sizing_method": "kelly_0.25x",
     })
 
-    return _emit_tagged_block(_SIZING_TAG, sizing)
+    return _sizing_output(sizing)
 
 
 # ---------------------------------------------------------------------------
@@ -226,39 +242,44 @@ def compute_position_sizing(context: str, **kwargs) -> str:  # noqa: ARG001
 # ---------------------------------------------------------------------------
 
 
-def conditional_logging(context: str, **kwargs) -> str:  # noqa: ARG001
+def conditional_logging(step_input: StepInput) -> StepOutput:
     """Conditional gate: records paper trade in DB + writes audit memo for BET.
 
     This is the SOLE owner of DB writes for paper trades.
     For SKIP decisions, only a trace event is recorded.
 
-    Returns a tagged JSON block with {action, trade_id, status} for route-level validation.
+    Returns a StepOutput with tagged JSON block {action, trade_id, status}.
     """
+    # Build context from StepInput
+    context = str(step_input.previous_step_content or "")
+    if step_input.input:
+        context = str(step_input.input) + "\n" + context
+
     # --- Check if sizing forced a skip ---
     sizing = _get_tagged_block(context, _SIZING_TAG)
     if sizing and sizing.get("force_skip"):
         result = {"action": "SKIP", "trade_id": None, "reason": sizing.get("sizing_note", "Sizing forced skip")}
         logger.info("Sizing forced SKIP: %s", result["reason"])
-        return _emit_tagged_block(_RECORD_TAG, result)
+        return _record_output(result)
 
     # --- Extract Decision Agent output (JSON with "action" key) ---
     decision_data = _extract_agent_json(context, "action")
     if not decision_data:
         result = {"action": "SKIP", "trade_id": None, "reason": "Could not parse Decision Agent output"}
         logger.warning(result["reason"])
-        return _emit_tagged_block(_RECORD_TAG, result)
+        return _record_output(result)
 
     action = (decision_data.get("action") or "").upper()
 
     if action == "SKIP":
         result = {"action": "SKIP", "trade_id": None, "reason": decision_data.get("rationale", "Agent chose SKIP")}
         logger.info("Decision Agent chose SKIP.")
-        return _emit_tagged_block(_RECORD_TAG, result)
+        return _record_output(result)
 
     if action != "BET":
         result = {"action": "SKIP", "trade_id": None, "reason": f"Unknown action: {action}"}
         logger.warning("Unknown action '%s' — treating as SKIP.", action)
-        return _emit_tagged_block(_RECORD_TAG, result)
+        return _record_output(result)
 
     # --- Build BetDecision from the Decision Agent's JSON output ---
     # Also pull sizing data for entry_price/slippage/stake if the agent didn't include them.
@@ -297,12 +318,12 @@ def conditional_logging(context: str, **kwargs) -> str:  # noqa: ARG001
     except Exception as e:
         result = {"action": "ERROR", "trade_id": None, "reason": f"Failed to build BetDecision: {e}"}
         logger.error(result["reason"])
-        return _emit_tagged_block(_RECORD_TAG, result)
+        return _record_output(result)
 
     if decision.stake <= 0:
         result = {"action": "SKIP", "trade_id": None, "reason": "BET with zero stake — treated as SKIP"}
         logger.warning(result["reason"])
-        return _emit_tagged_block(_RECORD_TAG, result)
+        return _record_output(result)
 
     # --- 1. Record paper trade in DB (source of truth) ---
     # Extract question from EventCandidate JSON
@@ -317,7 +338,7 @@ def conditional_logging(context: str, **kwargs) -> str:  # noqa: ARG001
     except Exception as e:
         result = {"action": "ERROR", "trade_id": None, "reason": f"DB write failed: {e}"}
         logger.error(result["reason"])
-        return _emit_tagged_block(_RECORD_TAG, result)
+        return _record_output(result)
 
     # --- 2. Logger agent writes audit memo ---
     memo_status = "skipped"
@@ -346,7 +367,7 @@ def conditional_logging(context: str, **kwargs) -> str:  # noqa: ARG001
         "entry_price": decision.entry_price,
         "memo_status": memo_status,
     }
-    return _emit_tagged_block(_RECORD_TAG, result)
+    return _record_output(result)
 
 
 # ---------------------------------------------------------------------------
@@ -356,7 +377,6 @@ def conditional_logging(context: str, **kwargs) -> str:  # noqa: ARG001
 prediction_workflow = Workflow(
     id="prediction-workflow",
     name="Crypto Prediction Pipeline",
-    input_schema=PredictionRequest,
     steps=[
         Step(name="Event Scan", agent=polymarket_agent),
         Parallel(
@@ -365,8 +385,8 @@ prediction_workflow = Workflow(
             name="Data Collection",
         ),
         Step(name="Risk Assessment", agent=risk_agent),
-        Step(name="Position Sizing", function=compute_position_sizing),
+        Step(name="Position Sizing", executor=compute_position_sizing),
         Step(name="Decision", agent=decision_agent),
-        Step(name="Record", function=conditional_logging),
+        Step(name="Record", executor=conditional_logging),
     ],
 )

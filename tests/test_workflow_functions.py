@@ -8,6 +8,8 @@ import json
 
 import pytest
 
+from agno.workflow.types import StepInput
+
 from workflows.prediction_workflow import (
     _emit_tagged_block,
     _extract_agent_json,
@@ -15,6 +17,11 @@ from workflows.prediction_workflow import (
     compute_position_sizing,
     conditional_logging,
 )
+
+
+def _make_step_input(context: str) -> StepInput:
+    """Helper to create StepInput from a context string."""
+    return StepInput(previous_step_content=context)
 
 
 # ---------------------------------------------------------------------------
@@ -69,9 +76,10 @@ class TestExtractAgentJson:
 
 
 class TestComputePositionSizing:
-    def _parse_sizing(self, result: str) -> dict:
-        block = _get_tagged_block(result, "SIZING_DATA")
-        assert block is not None, f"No SIZING_DATA block in: {result}"
+    def _parse_sizing(self, step_output) -> dict:
+        content = step_output.content if hasattr(step_output, 'content') else str(step_output)
+        block = _get_tagged_block(content, "SIZING_DATA")
+        assert block is not None, f"No SIZING_DATA block in: {content}"
         return block
 
     def test_positive_edge_yes_side(self):
@@ -83,7 +91,7 @@ class TestComputePositionSizing:
             '"no_book": {"token_id": "t2", "best_ask": 0.50, "best_bid": 0.48, '
             '"spread": 0.02, "depth_10pct": 25000}}'
         )
-        sizing = self._parse_sizing(compute_position_sizing(context))
+        sizing = self._parse_sizing(compute_position_sizing(_make_step_input(context)))
         assert sizing["recommended_stake"] > 0
         assert sizing["kelly_fraction_raw"] > 0
         assert sizing["entry_price"] > 0.50  # should be above best_ask
@@ -100,7 +108,7 @@ class TestComputePositionSizing:
             '"no_book": {"token_id": "t2", "best_ask": 0.42, "best_bid": 0.40, '
             '"spread": 0.02, "depth_10pct": 20000}}'
         )
-        sizing = self._parse_sizing(compute_position_sizing(context))
+        sizing = self._parse_sizing(compute_position_sizing(_make_step_input(context)))
         assert sizing["recommended_stake"] > 0
         assert sizing["recommended_side"] == "NO"
         # Entry price should be based on no_book.best_ask (~0.42), not yes_book
@@ -108,7 +116,7 @@ class TestComputePositionSizing:
 
     def test_no_edge_forces_skip(self):
         context = '{"estimated_prob_of_side": 0.45, "market_prob_of_side": 0.50}'
-        sizing = self._parse_sizing(compute_position_sizing(context))
+        sizing = self._parse_sizing(compute_position_sizing(_make_step_input(context)))
         assert sizing["recommended_stake"] == 0.0
         assert sizing["force_skip"] is True
 
@@ -130,7 +138,7 @@ class TestComputePositionSizing:
             '"no_book": {"token_id": "t2", "best_ask": 0.50, "best_bid": 0.48, '
             '"spread": 0.02, "depth_10pct": 10}}'
         )
-        sizing = self._parse_sizing(compute_position_sizing(context))
+        sizing = self._parse_sizing(compute_position_sizing(_make_step_input(context)))
         # depth_10pct=10 means only $10 in the book. Kelly stake at 90% vs 50%
         # edge is ~$1000+. Walking a $1000 order through a $10 book produces
         # massive slippage, which must trigger the hard gate unconditionally.
@@ -145,7 +153,7 @@ class TestComputePositionSizing:
             '"recommended_side": "YES"}\n'
             '{"gamma_market_id": "m1"}'  # no yes_book or no_book
         )
-        sizing = self._parse_sizing(compute_position_sizing(context))
+        sizing = self._parse_sizing(compute_position_sizing(_make_step_input(context)))
         assert sizing["force_skip"] is True
         assert "orderbook" in sizing.get("sizing_note", "").lower()
 
@@ -158,7 +166,7 @@ class TestComputePositionSizing:
             '"best_bid": 0.53, "spread": 0.02, "depth_10pct": 20000}}'
             # no_book is missing entirely
         )
-        sizing = self._parse_sizing(compute_position_sizing(context))
+        sizing = self._parse_sizing(compute_position_sizing(_make_step_input(context)))
         assert sizing["force_skip"] is True
         assert "orderbook" in sizing.get("sizing_note", "").lower()
 
@@ -169,14 +177,15 @@ class TestComputePositionSizing:
 
 
 class TestConditionalLogging:
-    def _parse_record(self, result: str) -> dict:
-        block = _get_tagged_block(result, "RECORD_RESULT")
-        assert block is not None, f"No RECORD_RESULT block in: {result}"
+    def _parse_record(self, step_output) -> dict:
+        content = step_output.content if hasattr(step_output, 'content') else str(step_output)
+        block = _get_tagged_block(content, "RECORD_RESULT")
+        assert block is not None, f"No RECORD_RESULT block in: {content}"
         return block
 
     def test_skip_from_agent(self):
         context = '{"action": "SKIP", "rationale": "No edge"}'
-        record = self._parse_record(conditional_logging(context))
+        record = self._parse_record(conditional_logging(_make_step_input(context)))
         assert record["action"] == "SKIP"
         assert record["trade_id"] is None
 
@@ -187,13 +196,13 @@ class TestConditionalLogging:
             "recommended_stake": 0,
         })
         context = f'{sizing_block}\n{{"action": "BET", "stake": 500}}'
-        record = self._parse_record(conditional_logging(context))
+        record = self._parse_record(conditional_logging(_make_step_input(context)))
         assert record["action"] == "SKIP"
         assert "Slippage" in record.get("reason", "")
 
     def test_bet_with_zero_stake(self):
         context = '{"action": "BET", "stake": 0, "side": "YES"}'
-        record = self._parse_record(conditional_logging(context))
+        record = self._parse_record(conditional_logging(_make_step_input(context)))
         assert record["action"] == "SKIP"
         assert "zero stake" in record.get("reason", "").lower()
 
@@ -227,7 +236,7 @@ class TestConditionalLogging:
             "confidence": "Low",
         })
         context = f"{sizing_block}\n{decision_json}"
-        record = self._parse_record(conditional_logging(context))
+        record = self._parse_record(conditional_logging(_make_step_input(context)))
         assert record["action"] == "SKIP"
         assert "zero stake" in record.get("reason", "").lower()
 
@@ -255,7 +264,7 @@ class TestConditionalLogging:
         event_json = '{"question": "Will BTC exceed $100K?"}'
         context = f"{sizing_block}\n{decision_json}\n{event_json}"
 
-        record = self._parse_record(conditional_logging(context))
+        record = self._parse_record(conditional_logging(_make_step_input(context)))
         assert record["action"] == "BET"
         assert record["trade_id"] is not None
         assert record["side"] == "YES"
@@ -288,7 +297,7 @@ class TestConditionalLogging:
         })
         context = f"{sizing_block}\n{decision_json}"
 
-        record = self._parse_record(conditional_logging(context))
+        record = self._parse_record(conditional_logging(_make_step_input(context)))
         assert record["action"] == "BET"
         assert record["side"] == "NO"
         assert record["stake"] == 300
