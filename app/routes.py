@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 
 from fastapi import APIRouter
 
@@ -25,18 +24,25 @@ router = APIRouter()
 
 _polymarket_tools = PolymarketTools()
 
-_RECORD_TAG = "RECORD_RESULT"
 
+def _extract_record(wf_result) -> dict:
+    """Extract the Record step result from workflow output.
 
-def _get_record_result(wf_content: str) -> dict:
-    """Extract the structured RECORD_RESULT block from workflow output."""
-    pattern = rf"<!-- {_RECORD_TAG} -->(\{{.*?\}})<!-- /{_RECORD_TAG} -->"
-    match = re.search(pattern, wf_content, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group(1))
-        except json.JSONDecodeError:
-            pass
+    The Record step (conditional_logging) returns StepOutput(content=dict).
+    The workflow's final result carries this as wf_result.content.
+    """
+    if not wf_result or wf_result.content is None:
+        return {"action": "unknown", "trade_id": None, "reason": "No workflow result"}
+    content = wf_result.content
+    if isinstance(content, dict):
+        return content
+    if hasattr(content, "model_dump"):
+        return content.model_dump(mode="json")
+    # Fallback: try JSON parse
+    try:
+        return json.loads(str(content))
+    except (json.JSONDecodeError, TypeError):
+        pass
     return {"action": "unknown", "trade_id": None, "reason": "Could not parse workflow result"}
 
 
@@ -71,9 +77,7 @@ async def scan_and_fanout(max_candidates: int = 5):
                             condition_id=candidate.condition_id,
                         )
                     )
-                    # Extract structured result from RECORD_RESULT tag
-                    wf_content = str(wf_result.content) if wf_result and wf_result.content else ""
-                    record = _get_record_result(wf_content)
+                    record = _extract_record(wf_result)
 
                     results.append({
                         "condition_id": candidate.condition_id,

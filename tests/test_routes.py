@@ -206,12 +206,9 @@ class TestSettleRoute:
 
 class TestScanAndFanoutRoute:
     def test_scan_returns_results(self, test_client, monkeypatch):
-        """Test /api/scan-and-fanout by monkeypatching the real dependencies it imports."""
+        """Test /api/scan-and-fanout by monkeypatching the real dependencies."""
         client, store = test_client
 
-        from workflows.prediction_workflow import _emit_tagged_block
-
-        # Mock polymarket_scanner (lazy-imported inside the route function)
         fake_candidate = type("C", (), {
             "condition_id": "0xscan1",
             "question": "Will BTC hit $100K?",
@@ -219,18 +216,14 @@ class TestScanAndFanoutRoute:
         fake_scan_content = type("Content", (), {"candidates": [fake_candidate]})()
         fake_scan_result = type("R", (), {"content": fake_scan_content})()
 
-        # Mock prediction_workflow (lazy-imported inside the route function)
-        record_block = _emit_tagged_block("RECORD_RESULT", {
+        # Workflow returns StepOutput with plain dict (from conditional_logging)
+        fake_wf_result = type("WF", (), {"content": {
             "action": "BET",
             "trade_id": "fake-trade-id",
             "side": "YES",
             "stake": 300,
-        })
-        fake_wf_result = type("WF", (), {"content": record_block})()
+        }})()
 
-        # Patch the modules that the route function imports at call time
-        # The route does: from agents import polymarket_scanner
-        #                 from workflows import prediction_workflow
         import agents
         import workflows
         monkeypatch.setattr(

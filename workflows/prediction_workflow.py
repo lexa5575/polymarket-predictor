@@ -1,24 +1,23 @@
 """
-Prediction Workflow
--------------------
+Prediction Workflow — Structured Step-to-Step Handoff
+-----------------------------------------------------
 
-Deterministic pipeline for evaluating a single prediction market:
-Event Scan → Market Data + News (parallel) → Risk → Sizing → Decision → Record
+Pipeline: Event Scan → Data+News (parallel) → Data Quality → Risk → Sizing → Decision → Record
 
-Each function step emits a tagged JSON block (<!-- STEP_NAME_DATA --> ... <!-- /STEP_NAME_DATA -->)
-so downstream steps parse only their intended input, not the full accumulated text.
-This avoids regex collisions like "side" matching inside "recommended_side".
+All steps after Data Collection are function-steps (executor=) that:
+1. Read typed outputs from prior steps via get_step_output()
+2. Call agents with complete prompts when needed
+3. Return typed StepOutput (Pydantic model or plain dict)
 
-Function steps:
-- compute_position_sizing: deterministic Kelly/slippage/stake from real data
-- conditional_logging: gates DB write + memo on BET vs SKIP (sole DB writer)
+No tagged string blocks. No JSON parsing from text.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import re
+
+from pydantic import BaseModel
 
 from agno.workflow import Parallel, Step, Workflow
 from agno.workflow.types import StepInput, StepOutput
@@ -32,7 +31,13 @@ from agents import (
     risk_agent,
 )
 from agents.settings import get_paper_trade_store
-from schemas.market import BetDecision
+from schemas.market import (
+    BetDecision,
+    EventCandidate,
+    MarketSnapshot,
+    RiskAssessment,
+    SentimentReport,
+)
 from schemas.workflow_input import PredictionRequest
 from storage.math_utils import (
     calculate_entry_price,
@@ -45,407 +50,378 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Tagged JSON block protocol
+# Helpers
 # ---------------------------------------------------------------------------
-# Each function step writes:
-#   <!-- TAG_DATA -->{"key": "value", ...}<!-- /TAG_DATA -->
-# Downstream steps extract only the block they need via _get_tagged_block().
-
-_DATA_QUALITY_TAG = "DATA_QUALITY"
-_SIZING_TAG = "SIZING_DATA"
-_RECORD_TAG = "RECORD_RESULT"
 
 
-def _emit_tagged_block(tag: str, data: dict) -> str:
-    """Wrap a dict as a tagged JSON block in the workflow context."""
-    return f"<!-- {tag} -->{json.dumps(data)}<!-- /{tag} -->"
-
-
-def _sizing_output(sizing: dict) -> StepOutput:
-    """Wrap sizing dict as a StepOutput with tagged content."""
-    return StepOutput(content=_emit_tagged_block(_SIZING_TAG, sizing))
-
-
-def _data_quality_output(data: dict) -> StepOutput:
-    """Wrap data quality check as a StepOutput with tagged content."""
-    return StepOutput(content=_emit_tagged_block(_DATA_QUALITY_TAG, data))
-
-
-def _record_output(result: dict) -> StepOutput:
-    """Wrap record result as a StepOutput with tagged content."""
-    return StepOutput(content=_emit_tagged_block(_RECORD_TAG, result))
-
-
-def _get_tagged_block(context: str, tag: str) -> dict | None:
-    """Extract a tagged JSON block from workflow context. Returns None if not found."""
-    pattern = rf"<!-- {tag} -->(\{{.*?\}})<!-- /{tag} -->"
-    match = re.search(pattern, context, re.DOTALL)
-    if match:
+def _step_content_to_dict(step_output: StepOutput | None) -> dict | None:
+    """Extract dict from step content. For function-step plain dict outputs."""
+    if not step_output or step_output.content is None:
+        return None
+    content = step_output.content
+    if hasattr(content, "model_dump"):
+        return content.model_dump(mode="json", exclude_none=True)
+    if isinstance(content, dict):
+        return content
+    if isinstance(content, str):
         try:
-            return json.loads(match.group(1))
-        except json.JSONDecodeError:
-            return None
+            return json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            pass
     return None
 
 
-def _find_json_block(context: str) -> dict | None:
-    """Find the last well-formed JSON object in the context (fallback for agent output).
+def _step_content_to_model(
+    step_output: StepOutput | None,
+    model_class: type[BaseModel],
+) -> BaseModel | None:
+    """Extract and validate a Pydantic model from step content. Returns None if invalid."""
+    if not step_output or step_output.content is None:
+        return None
+    content = step_output.content
+    if isinstance(content, model_class):
+        return content
+    try:
+        d = content.model_dump(mode="json") if hasattr(content, "model_dump") else content
+        return model_class.model_validate(d)
+    except Exception:
+        return None
 
-    Agents with output_schema produce JSON. We search backwards for the last
-    complete JSON object, which is typically the most recent agent's output.
-    """
-    # Find all JSON-like blocks (starting with { and ending with })
-    candidates = re.findall(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", context)
-    for candidate in reversed(candidates):
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
-    return None
+
+def _safe_risk_assessment(condition_id: str = "unknown", warnings: list[str] | None = None) -> RiskAssessment:
+    """Create a safe Unacceptable RiskAssessment fallback."""
+    return RiskAssessment(
+        condition_id=condition_id,
+        risk_rating="Unacceptable",
+        recommended_side="YES",
+        estimated_prob_of_side=0.5,
+        market_prob_of_side=0.5,
+        edge=0.0,
+        underlier_group="other",
+        warnings=warnings or ["Safe fallback"],
+        liquidity_ok=False,
+        correlated_positions=0,
+    )
 
 
-def _extract_agent_json(context: str, key_marker: str) -> dict | None:
-    """Extract a JSON block from context that contains a specific key.
-
-    This is more reliable than regex on individual fields because it finds
-    the complete JSON object that owns the key.
-    """
-    for match in re.finditer(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", context):
-        try:
-            obj = json.loads(match.group())
-            if key_marker in obj:
-                return obj
-        except json.JSONDecodeError:
-            continue
-    return None
+def _safe_bet_decision(
+    condition_id: str = "unknown",
+    market_slug: str = "unknown",
+    rationale: str = "Safe fallback",
+) -> BetDecision:
+    """Create a safe SKIP BetDecision fallback."""
+    return BetDecision(
+        condition_id=condition_id,
+        market_slug=market_slug,
+        token_id="",
+        side="YES",
+        action="SKIP",
+        estimated_prob_of_side=0.5,
+        market_prob_of_side_at_entry=0.5,
+        edge=0.0,
+        entry_price=0.0,
+        slippage_estimate=0.0,
+        stake=0.0,
+        underlier_group="other",
+        rationale=rationale,
+        exit_conditions=[],
+        confidence="Low",
+    )
 
 
 # ---------------------------------------------------------------------------
-# Function step: Data Quality Check
+# Step: Data Quality Check
 # ---------------------------------------------------------------------------
 
 
 def ensure_data_quality(step_input: StepInput) -> StepOutput:
-    """Check that required data from parallel agents is present.
+    """Validate that required data from parallel agents is present and schema-valid."""
+    event = _step_content_to_model(step_input.get_step_output("Event Scan"), EventCandidate)
+    market = _step_content_to_model(step_input.get_step_output("Market Data"), MarketSnapshot)
+    sentiment = _step_content_to_model(step_input.get_step_output("News & Sentiment"), SentimentReport)
 
-    Runs after Data Collection (parallel) and before Risk Assessment.
-    - If SentimentReport missing: inject neutral fallback
-    - If MarketSnapshot missing: flag force_skip (no synthetic data)
-    """
-    context = str(step_input.previous_step_content or "")
-    if step_input.input:
-        context = str(step_input.input) + "\n" + context
+    result: dict = {
+        "event_missing": event is None,
+        "market_data_missing": market is None,
+        "sentiment_missing": sentiment is None,
+        "force_skip": False,
+    }
 
-    sentiment_data = _extract_agent_json(context, "sentiment_score")
-    market_data = _extract_agent_json(context, "coin_id")
+    if event is None:
+        result["force_skip"] = True
+        result["skip_reason"] = "EventCandidate missing or invalid"
+    elif market is None:
+        result["force_skip"] = True
+        result["skip_reason"] = "MarketSnapshot missing or invalid"
 
-    injections = []
-    quality = {"market_data_missing": False, "force_skip": False}
-
-    # Sentiment fallback — inject neutral if missing
-    if not sentiment_data:
-        logger.warning("SentimentReport missing — injecting neutral fallback.")
-        fallback_sentiment = {
+    if sentiment is None:
+        result["sentiment_fallback"] = {
             "query": "fallback_no_search",
             "sentiment_score": 0.0,
-            "key_narratives": ["No sentiment data — Exa search timed out"],
+            "key_narratives": ["No sentiment data — search timed out or failed"],
             "sources_count": 0,
             "confidence": 0.1,
         }
-        injections.append(json.dumps(fallback_sentiment))
-
-    # MarketSnapshot missing — force skip, no synthetic data
-    if not market_data:
-        logger.warning("MarketSnapshot missing — flagging force_skip.")
-        quality["market_data_missing"] = True
-        quality["force_skip"] = True
-        quality["skip_reason"] = "Market data missing — cannot assess risk or size position"
-
-    result = _emit_tagged_block(_DATA_QUALITY_TAG, quality)
-    if injections:
-        result += "\n" + "\n".join(injections)
 
     return StepOutput(content=result)
 
 
 # ---------------------------------------------------------------------------
-# Function step: Position Sizing
+# Step: Risk Assessment (fn-step wrapping agent)
+# ---------------------------------------------------------------------------
+
+
+def run_risk_assessment(step_input: StepInput) -> StepOutput:
+    """Gather all data, call risk_agent with complete context, validate response."""
+    event = _step_content_to_model(step_input.get_step_output("Event Scan"), EventCandidate)
+    dq = _step_content_to_dict(step_input.get_step_output("Data Quality"))
+    market = _step_content_to_model(step_input.get_step_output("Market Data"), MarketSnapshot)
+    sentiment = _step_content_to_model(step_input.get_step_output("News & Sentiment"), SentimentReport)
+
+    # Sentiment fallback from Data Quality
+    if not sentiment and dq and dq.get("sentiment_fallback"):
+        sentiment = dq["sentiment_fallback"]
+
+    event_d = event.model_dump(mode="json") if event else None
+    market_d = market.model_dump(mode="json") if market else None
+    sentiment_d = sentiment.model_dump(mode="json") if hasattr(sentiment, "model_dump") else sentiment
+
+    # Force skip from data quality
+    if dq and dq.get("force_skip"):
+        return StepOutput(content=_safe_risk_assessment(
+            condition_id=event_d.get("condition_id", "unknown") if event_d else "unknown",
+            warnings=[dq.get("skip_reason", "Data quality failure")],
+        ))
+
+    # Missing event (double-check even if DQ didn't catch it)
+    if not event_d:
+        return StepOutput(content=_safe_risk_assessment(warnings=["EventCandidate not available"]))
+
+    prompt = (
+        f"Analyze this prediction market for risk:\n\n"
+        f"Event:\n{json.dumps(event_d, indent=2)}\n\n"
+        f"Market Data:\n{json.dumps(market_d, indent=2) if market_d else 'Not available'}\n\n"
+        f"Sentiment:\n{json.dumps(sentiment_d, indent=2) if sentiment_d else 'Not available'}"
+    )
+
+    try:
+        response = risk_agent.run(prompt)
+    except Exception as e:
+        logger.error("Risk agent failed: %s", e)
+        return StepOutput(content=_safe_risk_assessment(
+            condition_id=event_d.get("condition_id", "unknown"),
+            warnings=[f"Risk agent exception: {e}"],
+        ))
+
+    # Validate response type
+    if isinstance(response.content, RiskAssessment):
+        return StepOutput(content=response.content)
+    try:
+        d = response.content.model_dump(mode="json") if hasattr(response.content, "model_dump") else response.content
+        return StepOutput(content=RiskAssessment.model_validate(d))
+    except Exception:
+        pass
+
+    return StepOutput(content=_safe_risk_assessment(
+        condition_id=event_d.get("condition_id", "unknown"),
+        warnings=["Agent returned invalid response"],
+    ))
+
+
+# ---------------------------------------------------------------------------
+# Step: Position Sizing (deterministic)
 # ---------------------------------------------------------------------------
 
 
 def compute_position_sizing(step_input: StepInput) -> StepOutput:
-    """Deterministic sizing — computes Kelly, slippage, stake, entry price.
+    """Deterministic sizing: Kelly, slippage, entry price."""
+    dq = _step_content_to_dict(step_input.get_step_output("Data Quality"))
+    if dq and dq.get("force_skip"):
+        return StepOutput(content={"force_skip": True, "sizing_note": dq.get("skip_reason")})
 
-    Reads structured JSON from prior agent outputs:
-    - RiskAssessment JSON (contains estimated_prob_of_side, market_prob_of_side, recommended_side)
-    - EventCandidate JSON (contains yes_book, no_book with best_ask, depth_10pct)
-    """
-    # Build context from StepInput
-    context = str(step_input.previous_step_content or "")
-    if step_input.input:
-        context = str(step_input.input) + "\n" + context
+    risk_model = _step_content_to_model(step_input.get_step_output("Risk Assessment"), RiskAssessment)
+    event_model = _step_content_to_model(step_input.get_step_output("Event Scan"), EventCandidate)
+    risk = risk_model.model_dump(mode="json") if risk_model else None
+    event = event_model.model_dump(mode="json") if event_model else None
 
-    # --- Check DATA_QUALITY gate first ---
-    data_quality = _get_tagged_block(context, _DATA_QUALITY_TAG)
-    if data_quality and data_quality.get("force_skip"):
-        sizing = {
-            "force_skip": True,
-            "sizing_note": data_quality.get("skip_reason", "Data quality check failed"),
-            "recommended_stake": 0.0,
-            "sizing_method": "data_quality_gate",
-        }
-        return _sizing_output(sizing)
+    # --- Required field guards ---
+    if risk is None:
+        return StepOutput(content={"force_skip": True, "sizing_note": "Risk data missing or invalid"})
+    if risk.get("estimated_prob_of_side") is None:
+        return StepOutput(content={"force_skip": True, "sizing_note": "estimated_prob_of_side missing"})
+    if risk.get("market_prob_of_side") is None:
+        return StepOutput(content={"force_skip": True, "sizing_note": "market_prob_of_side missing"})
+    recommended_side = risk.get("recommended_side")
+    if recommended_side not in {"YES", "NO"}:
+        return StepOutput(content={"force_skip": True, "sizing_note": f"Invalid recommended_side: {recommended_side}"})
 
-    # --- Extract RiskAssessment from agent output ---
-    risk_data = _extract_agent_json(context, "estimated_prob_of_side")
-    event_data = _extract_agent_json(context, "yes_book") or _extract_agent_json(context, "gamma_market_id")
+    if event is None:
+        return StepOutput(content={"force_skip": True, "sizing_note": "Event data missing or invalid"})
+    side_key = "yes_book" if recommended_side == "YES" else "no_book"
+    book = event.get(side_key) or {}
+    best_ask = book.get("best_ask")
+    depth = book.get("depth_10pct")
+    if best_ask is None or best_ask <= 0:
+        return StepOutput(content={"force_skip": True, "sizing_note": f"No valid best_ask in {side_key}"})
+    if depth is None or depth <= 0:
+        return StepOutput(content={"force_skip": True, "sizing_note": f"No depth in {side_key}"})
 
-    estimated_prob = risk_data.get("estimated_prob_of_side") if risk_data else None
-    market_prob = risk_data.get("market_prob_of_side") if risk_data else None
-    recommended_side = risk_data.get("recommended_side", "YES") if risk_data else "YES"
-
-    # --- Get real bankroll from store ---
+    # --- Bankroll ---
     try:
         store = get_paper_trade_store()
         snapshot = store.get_bankroll_snapshot()
         bankroll = snapshot.current_bankroll
-    except Exception as e:
-        logger.warning("Could not get bankroll snapshot, using default: %s", e)
+    except Exception:
         bankroll = 10_000.0
 
-    max_stake = bankroll * 0.20  # 20% cap from mandate
+    max_stake = bankroll * 0.20
+    estimated_prob = risk["estimated_prob_of_side"]
+    market_prob = risk["market_prob_of_side"]
 
-    # --- Default sizing (safe fallback) ---
-    sizing = {
-        "bankroll": round(bankroll, 2),
-        "max_allowed_stake": round(max_stake, 2),
-        "recommended_side": recommended_side,
-        "kelly_fraction_raw": 0.0,
-        "kelly_fraction_quarter": 0.0,
-        "recommended_stake": 0.0,
-        "entry_price": 0.0,
-        "slippage_estimate": 0.0,
-        "force_skip": False,
-        "sizing_method": "fallback",
-        "sizing_note": "",
-    }
+    if estimated_prob <= market_prob:
+        return StepOutput(content={"force_skip": True, "sizing_note": "No positive edge"})
 
-    if not (estimated_prob and market_prob and estimated_prob > market_prob):
-        sizing["force_skip"] = True
-        sizing["sizing_note"] = "No positive edge detected or data missing"
-        return _sizing_output(sizing)
-
-    # --- Kelly Criterion ---
+    # --- Kelly ---
     raw_kelly = kelly_criterion(estimated_prob, market_prob)
     quarter_kelly = fractional_kelly(raw_kelly, 0.25)
     raw_stake = quarter_kelly * bankroll
     capped_stake = min(raw_stake, max_stake)
 
-    # Enforce minimum bet of 2% bankroll
     min_stake = bankroll * 0.02
     if capped_stake < min_stake:
-        sizing["force_skip"] = True
-        sizing["sizing_note"] = f"Stake ${capped_stake:.2f} below minimum ${min_stake:.2f}"
-        return _sizing_output(sizing)
+        return StepOutput(content={"force_skip": True, "sizing_note": f"Stake ${capped_stake:.2f} below minimum ${min_stake:.2f}"})
 
-    # --- Extract orderbook for the recommended side ---
-    best_ask = None
-    depth = None
-    if event_data:
-        side_key = f"{'yes' if recommended_side == 'YES' else 'no'}_book"
-        book = event_data.get(side_key, {})
-        if isinstance(book, dict):
-            best_ask = book.get("best_ask")
-            depth = book.get("depth_10pct")
-
-    # Build approximate orderbook for slippage estimation
-    # HARD RULE: if no valid orderbook for the recommended side, force skip.
-    # Never synthesize a fake orderbook — that hides broken handoffs.
-    if best_ask and depth and depth > 0:
-        third = depth / 3.0
-        asks = [
-            (best_ask, third),
-            (best_ask + 0.01, third),
-            (best_ask + 0.02, third),
-        ]
-    else:
-        sizing["force_skip"] = True
-        sizing["sizing_note"] = (
-            f"No valid orderbook for {recommended_side} side — "
-            "cannot compute entry price or slippage safely"
-        )
-        return _sizing_output(sizing)
-
+    # --- Slippage from real orderbook ---
+    third = depth / 3.0
+    asks = [(best_ask, third), (best_ask + 0.01, third), (best_ask + 0.02, third)]
     slippage = estimate_slippage(capped_stake, asks)
     entry_price = calculate_entry_price(best_ask, slippage)
 
-    # --- HARD GATE: slippage budget (max 2% of best_ask) ---
-    slippage_pct = (slippage / best_ask) if best_ask > 0 else 0.0
+    # Hard gate: slippage > 2%
+    slippage_pct = slippage / best_ask if best_ask > 0 else 0.0
     if slippage_pct > 0.02:
-        sizing["force_skip"] = True
-        sizing["sizing_note"] = (
-            f"Slippage {slippage_pct:.1%} exceeds 2% budget. "
-            f"Stake zeroed — mandate violation."
-        )
-        sizing["slippage_estimate"] = round(slippage, 4)
-        return _sizing_output(sizing)
+        return StepOutput(content={"force_skip": True, "sizing_note": f"Slippage {slippage_pct:.1%} exceeds 2% budget"})
 
-    sizing.update({
+    return StepOutput(content={
+        "force_skip": False,
+        "recommended_side": recommended_side,
         "kelly_fraction_raw": round(raw_kelly, 4),
         "kelly_fraction_quarter": round(quarter_kelly, 4),
         "recommended_stake": round(capped_stake, 2),
         "entry_price": round(entry_price, 4),
         "slippage_estimate": round(slippage, 4),
-        "sizing_method": "kelly_0.25x",
+        "bankroll": round(bankroll, 2),
     })
-
-    return _sizing_output(sizing)
 
 
 # ---------------------------------------------------------------------------
-# Function step: Conditional Logging (sole DB writer)
+# Step: Decision (fn-step wrapping agent)
+# ---------------------------------------------------------------------------
+
+
+def run_decision(step_input: StepInput) -> StepOutput:
+    """Gather ALL data, call decision_agent with complete context, validate response."""
+    event = _step_content_to_model(step_input.get_step_output("Event Scan"), EventCandidate)
+    risk = _step_content_to_model(step_input.get_step_output("Risk Assessment"), RiskAssessment)
+    sizing = _step_content_to_dict(step_input.get_step_output("Position Sizing"))
+    market = _step_content_to_model(step_input.get_step_output("Market Data"), MarketSnapshot)
+    sentiment = _step_content_to_model(step_input.get_step_output("News & Sentiment"), SentimentReport)
+
+    dq = _step_content_to_dict(step_input.get_step_output("Data Quality"))
+    if not sentiment and dq and dq.get("sentiment_fallback"):
+        sentiment = dq["sentiment_fallback"]
+
+    event_d = event.model_dump(mode="json") if event else None
+    risk_d = risk.model_dump(mode="json") if risk else None
+    market_d = market.model_dump(mode="json") if market else None
+    sentiment_d = sentiment.model_dump(mode="json") if hasattr(sentiment, "model_dump") else sentiment
+
+    cid = event_d.get("condition_id", "unknown") if event_d else "unknown"
+    slug = event_d.get("market_slug", "unknown") if event_d else "unknown"
+
+    # Force skip from sizing
+    if sizing and sizing.get("force_skip"):
+        return StepOutput(content=_safe_bet_decision(cid, slug, sizing.get("sizing_note", "Forced skip")))
+
+    # Missing event
+    if not event_d:
+        return StepOutput(content=_safe_bet_decision(rationale="EventCandidate not available"))
+
+    prompt = (
+        f"Make a final BET/SKIP decision:\n\n"
+        f"Event:\n{json.dumps(event_d, indent=2)}\n\n"
+        f"Market Data:\n{json.dumps(market_d, indent=2) if market_d else 'N/A'}\n\n"
+        f"Sentiment:\n{json.dumps(sentiment_d, indent=2) if sentiment_d else 'N/A'}\n\n"
+        f"Risk Assessment:\n{json.dumps(risk_d, indent=2) if risk_d else 'N/A'}\n\n"
+        f"Position Sizing:\n{json.dumps(sizing, indent=2) if sizing else 'N/A'}"
+    )
+
+    try:
+        response = decision_agent.run(prompt)
+    except Exception as e:
+        logger.error("Decision agent failed: %s", e)
+        return StepOutput(content=_safe_bet_decision(cid, slug, f"Decision agent exception: {e}"))
+
+    # Validate response type
+    if isinstance(response.content, BetDecision):
+        return StepOutput(content=response.content)
+    try:
+        d = response.content.model_dump(mode="json") if hasattr(response.content, "model_dump") else response.content
+        return StepOutput(content=BetDecision.model_validate(d))
+    except Exception:
+        pass
+
+    return StepOutput(content=_safe_bet_decision(cid, slug, "Agent returned invalid response"))
+
+
+# ---------------------------------------------------------------------------
+# Step: Record (conditional logging — sole DB writer)
 # ---------------------------------------------------------------------------
 
 
 def conditional_logging(step_input: StepInput) -> StepOutput:
-    """Conditional gate: records paper trade in DB + writes audit memo for BET.
-
-    This is the SOLE owner of DB writes for paper trades.
-    For SKIP decisions, only a trace event is recorded.
-
-    Returns a StepOutput with tagged JSON block {action, trade_id, status}.
-    """
-    # Build context from StepInput
-    context = str(step_input.previous_step_content or "")
-    if step_input.input:
-        context = str(step_input.input) + "\n" + context
-
-    # --- Check if sizing forced a skip ---
-    sizing = _get_tagged_block(context, _SIZING_TAG)
+    """Record paper trade in DB + write audit memo. Only for BET decisions."""
+    # Hard backstop: force_skip from sizing overrides everything
+    sizing = _step_content_to_dict(step_input.get_step_output("Position Sizing"))
     if sizing and sizing.get("force_skip"):
-        result = {"action": "SKIP", "trade_id": None, "reason": sizing.get("sizing_note", "Sizing forced skip")}
-        logger.info("Sizing forced SKIP: %s", result["reason"])
-        return _record_output(result)
+        return StepOutput(content={"action": "SKIP", "trade_id": None, "reason": sizing.get("sizing_note")})
 
-    # --- Extract Decision Agent output (JSON with "action" key) ---
-    decision_data = _extract_agent_json(context, "action")
+    # Read typed BetDecision
+    decision = _step_content_to_model(step_input.get_step_output("Decision"), BetDecision)
+    if not decision:
+        return StepOutput(content={"action": "SKIP", "trade_id": None, "reason": "No valid BetDecision"})
 
-    # Fallback: try extracting JSON from markdown code blocks (```json ... ```)
-    if not decision_data:
-        md_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", context, re.DOTALL)
-        if md_match:
-            try:
-                candidate = json.loads(md_match.group(1))
-                if "action" in candidate:
-                    decision_data = candidate
-                    logger.info("Parsed Decision Agent output from markdown code block.")
-            except json.JSONDecodeError:
-                pass
+    if decision.action != "BET" or decision.stake <= 0:
+        return StepOutput(content={"action": "SKIP", "trade_id": None, "reason": decision.rationale})
 
-    if not decision_data:
-        logger.warning("Could not parse Decision Agent output. Context tail: %s", context[-200:])
-        result = {"action": "SKIP", "trade_id": None, "reason": "Could not parse Decision Agent output"}
-        return _record_output(result)
+    # Get question from EventCandidate
+    event = _step_content_to_model(step_input.get_step_output("Event Scan"), EventCandidate)
+    question = event.question if event else decision.market_slug
 
-    action = (decision_data.get("action") or "").upper()
-
-    if action == "SKIP":
-        result = {"action": "SKIP", "trade_id": None, "reason": decision_data.get("rationale", "Agent chose SKIP")}
-        logger.info("Decision Agent chose SKIP.")
-        return _record_output(result)
-
-    if action != "BET":
-        result = {"action": "SKIP", "trade_id": None, "reason": f"Unknown action: {action}"}
-        logger.warning("Unknown action '%s' — treating as SKIP.", action)
-        return _record_output(result)
-
-    # --- Build BetDecision from the Decision Agent's JSON output ---
-    # Also pull sizing data for entry_price/slippage/stake if the agent didn't include them.
-    # IMPORTANT: use `is None` checks, not `or`, to preserve explicit zeros from the agent.
-    # If the agent says stake=0, that means "don't bet" — don't override with sizing.
-    sizing = sizing or {}
-    try:
-        # Stake: agent value takes precedence (even if 0). Only fall back to sizing if key absent.
-        agent_stake = decision_data.get("stake")
-        stake = agent_stake if agent_stake is not None else (sizing.get("recommended_stake") or 0.0)
-
-        # Entry price / slippage: same None-aware fallback
-        agent_entry = decision_data.get("entry_price")
-        entry_price = agent_entry if agent_entry is not None else (sizing.get("entry_price") or 0.5)
-
-        agent_slippage = decision_data.get("slippage_estimate")
-        slippage_est = agent_slippage if agent_slippage is not None else (sizing.get("slippage_estimate") or 0.01)
-
-        decision = BetDecision(
-            condition_id=decision_data.get("condition_id", "unknown"),
-            market_slug=decision_data.get("market_slug", "unknown"),
-            token_id=decision_data.get("token_id", "unknown"),
-            side=decision_data.get("side", "YES"),
-            action="BET",
-            estimated_prob_of_side=decision_data.get("estimated_prob_of_side", 0.5),
-            market_prob_of_side_at_entry=decision_data.get("market_prob_of_side_at_entry", 0.5),
-            edge=decision_data.get("edge", 0.0),
-            entry_price=entry_price,
-            slippage_estimate=slippage_est,
-            stake=stake,
-            underlier_group=decision_data.get("underlier_group", "other"),
-            rationale=decision_data.get("rationale", "See workflow trace."),
-            exit_conditions=decision_data.get("exit_conditions", []),
-            confidence=decision_data.get("confidence", "Medium"),
-        )
-    except Exception as e:
-        result = {"action": "ERROR", "trade_id": None, "reason": f"Failed to build BetDecision: {e}"}
-        logger.error(result["reason"])
-        return _record_output(result)
-
-    if decision.stake <= 0:
-        result = {"action": "SKIP", "trade_id": None, "reason": "BET with zero stake — treated as SKIP"}
-        logger.warning(result["reason"])
-        return _record_output(result)
-
-    # --- 1. Record paper trade in DB (source of truth) ---
-    # Extract question from EventCandidate JSON
-    event_data = _extract_agent_json(context, "question")
-    question = (event_data.get("question") if event_data else None) or decision.market_slug
-
+    # Record trade in DB (source of truth)
     try:
         store = get_paper_trade_store()
         trade = store.open_trade(decision, question)
-        trade_id = trade.id
-        logger.info("Paper trade recorded: %s (side=%s, stake=$%.2f)", trade_id, decision.side, decision.stake)
     except Exception as e:
-        result = {"action": "ERROR", "trade_id": None, "reason": f"DB write failed: {e}"}
-        logger.error(result["reason"])
-        return _record_output(result)
+        logger.error("Failed to record paper trade: %s", e)
+        return StepOutput(content={"action": "ERROR", "trade_id": None, "reason": f"DB write failed: {e}"})
 
-    # --- 2. Logger agent writes audit memo ---
-    memo_status = "skipped"
+    # Logger agent writes audit memo (best-effort, non-blocking)
     try:
-        response = logger_agent.run(
-            f"Write an audit memo for this BET decision.\n"
-            f"Trade ID: {trade_id}\n"
-            f"Question: {question}\n"
-            f"Side: {decision.side}\n"
-            f"Stake: ${decision.stake:.2f}\n"
-            f"Entry price: {decision.entry_price:.4f}\n"
-            f"Edge: {decision.edge:.2%}\n"
-            f"Confidence: {decision.confidence}\n"
-            f"Underlier group: {decision.underlier_group}\n"
+        logger_agent.run(
+            f"Write audit memo: Trade {trade.id}, {decision.side} ${decision.stake:.2f}, "
+            f"edge {decision.edge:.2%}, {question}"
         )
-        memo_status = "written" if response else "failed"
     except Exception as e:
-        logger.warning("Memo generation failed (trade still recorded): %s", e)
-        memo_status = f"error: {e}"
+        logger.warning("Memo generation failed (trade recorded): %s", e)
 
-    result = {
+    return StepOutput(content={
         "action": "BET",
-        "trade_id": trade_id,
+        "trade_id": trade.id,
         "side": decision.side,
         "stake": decision.stake,
         "entry_price": decision.entry_price,
-        "memo_status": memo_status,
-    }
-    return _record_output(result)
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -455,6 +431,7 @@ def conditional_logging(step_input: StepInput) -> StepOutput:
 prediction_workflow = Workflow(
     id="prediction-workflow",
     name="Crypto Prediction Pipeline",
+    input_schema=PredictionRequest,
     steps=[
         Step(name="Event Scan", agent=polymarket_agent),
         Parallel(
@@ -463,9 +440,9 @@ prediction_workflow = Workflow(
             name="Data Collection",
         ),
         Step(name="Data Quality", executor=ensure_data_quality),
-        Step(name="Risk Assessment", agent=risk_agent),
+        Step(name="Risk Assessment", executor=run_risk_assessment),
         Step(name="Position Sizing", executor=compute_position_sizing),
-        Step(name="Decision", agent=decision_agent),
+        Step(name="Decision", executor=run_decision),
         Step(name="Record", executor=conditional_logging),
     ],
 )

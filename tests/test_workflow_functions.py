@@ -1,423 +1,482 @@
-"""Tests for workflow function steps: compute_position_sizing and conditional_logging.
+"""Tests for workflow function steps with typed step-to-step handoff.
 
-These test the deterministic logic without requiring LLM calls or live APIs.
-Uses SQLite in-memory for paper trade persistence.
+Tests verify that function steps correctly read typed StepOutput.content
+(Pydantic models and dicts) without text/JSON parsing.
 """
 
 import json
 
 import pytest
+from pydantic import BaseModel
 
-from agno.workflow.types import StepInput
+from agno.workflow.types import StepInput, StepOutput
 
+from schemas.market import (
+    BetDecision,
+    EventCandidate,
+    MarketSnapshot,
+    RiskAssessment,
+    SentimentReport,
+    TokenBook,
+)
 from workflows.prediction_workflow import (
-    _emit_tagged_block,
-    _extract_agent_json,
-    _get_tagged_block,
+    _safe_bet_decision,
+    _safe_risk_assessment,
+    _step_content_to_dict,
+    _step_content_to_model,
     compute_position_sizing,
     conditional_logging,
     ensure_data_quality,
+    run_decision,
+    run_risk_assessment,
 )
 
 
-def _make_step_input(context: str) -> StepInput:
-    """Helper to create StepInput from a context string."""
-    return StepInput(previous_step_content=context)
-
-
 # ---------------------------------------------------------------------------
-# Tagged block protocol tests
+# Fixtures
 # ---------------------------------------------------------------------------
 
 
-class TestTaggedBlocks:
-    def test_roundtrip(self):
-        data = {"action": "BET", "stake": 500}
-        block = _emit_tagged_block("TEST", data)
-        assert _get_tagged_block(block, "TEST") == data
-
-    def test_missing_tag(self):
-        assert _get_tagged_block("no tags here", "TEST") is None
-
-    def test_surrounded_by_text(self):
-        data = {"x": 1}
-        text = f"some preamble\n{_emit_tagged_block('T', data)}\nsome epilogue"
-        assert _get_tagged_block(text, "T") == data
+def _make_token_book(**overrides) -> dict:
+    defaults = {"token_id": "t1", "best_bid": 0.49, "best_ask": 0.51, "spread": 0.02, "depth_10pct": 20000.0}
+    defaults.update(overrides)
+    return defaults
 
 
-class TestExtractAgentJson:
-    def test_finds_json_with_key(self):
-        context = 'Some text\n{"estimated_prob_of_side": 0.65, "market_prob_of_side": 0.50}\nMore text'
-        result = _extract_agent_json(context, "estimated_prob_of_side")
+def _make_event_candidate(**overrides) -> EventCandidate:
+    defaults = dict(
+        gamma_market_id="gm1",
+        condition_id="0xtest",
+        market_slug="btc-test",
+        question="Will BTC exceed $100K?",
+        category="crypto",
+        end_date="2026-06-30T00:00:00Z",
+        yes_book=TokenBook(**_make_token_book(token_id="tyes")),
+        no_book=TokenBook(**_make_token_book(token_id="tno", best_bid=0.48, best_ask=0.50)),
+        market_prob_yes=0.51,
+        volume_24h=50000.0,
+        total_liquidity=40000.0,
+    )
+    defaults.update(overrides)
+    return EventCandidate(**defaults)
+
+
+def _make_market_snapshot(**overrides) -> MarketSnapshot:
+    defaults = dict(
+        coin_id="bitcoin", price_usd=67000.0, change_24h_pct=2.5,
+        market_cap=1300000000000, fear_greed_index=65,
+        fear_greed_label="Greed", signal="Bullish",
+    )
+    defaults.update(overrides)
+    return MarketSnapshot(**defaults)
+
+
+def _make_sentiment_report(**overrides) -> SentimentReport:
+    defaults = dict(
+        query="btc 100k", sentiment_score=0.4,
+        key_narratives=["Bullish momentum"], sources_count=5, confidence=0.7,
+    )
+    defaults.update(overrides)
+    return SentimentReport(**defaults)
+
+
+def _make_risk_assessment(**overrides) -> RiskAssessment:
+    defaults = dict(
+        condition_id="0xtest", risk_rating="Moderate", recommended_side="YES",
+        estimated_prob_of_side=0.65, market_prob_of_side=0.51, edge=0.14,
+        underlier_group="btc_price", warnings=[], liquidity_ok=True, correlated_positions=0,
+    )
+    defaults.update(overrides)
+    return RiskAssessment(**defaults)
+
+
+def _make_step_input(**step_outputs) -> StepInput:
+    """Create StepInput with named step outputs."""
+    outputs = {}
+    for name, content in step_outputs.items():
+        outputs[name] = StepOutput(step_name=name, content=content)
+    return StepInput(previous_step_outputs=outputs)
+
+
+# ---------------------------------------------------------------------------
+# Helper tests
+# ---------------------------------------------------------------------------
+
+
+class TestStepContentToDict:
+    def test_pydantic_model(self):
+        ms = _make_market_snapshot()
+        result = _step_content_to_dict(StepOutput(content=ms))
         assert result is not None
-        assert result["estimated_prob_of_side"] == 0.65
+        assert result["coin_id"] == "bitcoin"
+        assert result["price_usd"] == 67000.0
 
-    def test_no_key_collision_side_vs_recommended_side(self):
-        """Ensure we find the correct JSON block when both 'side' and 'recommended_side' exist."""
-        risk_json = '{"recommended_side": "NO", "estimated_prob_of_side": 0.7}'
-        decision_json = '{"side": "NO", "action": "BET", "stake": 300}'
-        context = f"Risk output: {risk_json}\nDecision output: {decision_json}"
+    def test_dict_passthrough(self):
+        d = {"force_skip": True, "sizing_note": "test"}
+        assert _step_content_to_dict(StepOutput(content=d)) == d
 
-        risk = _extract_agent_json(context, "recommended_side")
-        assert risk is not None
-        assert risk["recommended_side"] == "NO"
+    def test_json_string(self):
+        result = _step_content_to_dict(StepOutput(content='{"key": "value"}'))
+        assert result == {"key": "value"}
 
-        decision = _extract_agent_json(context, "action")
-        assert decision is not None
-        assert decision["side"] == "NO"
-        assert decision["action"] == "BET"
-
-    def test_not_found(self):
-        assert _extract_agent_json("no json here", "missing_key") is None
+    def test_none(self):
+        assert _step_content_to_dict(None) is None
+        assert _step_content_to_dict(StepOutput(content=None)) is None
 
 
-# ---------------------------------------------------------------------------
-# Position Sizing tests
-# ---------------------------------------------------------------------------
+class TestStepContentToModel:
+    def test_correct_model(self):
+        ms = _make_market_snapshot()
+        result = _step_content_to_model(StepOutput(content=ms), MarketSnapshot)
+        assert result is not None
+        assert isinstance(result, MarketSnapshot)
+        assert result.coin_id == "bitcoin"
 
+    def test_wrong_model_returns_none(self):
+        ms = _make_market_snapshot()
+        result = _step_content_to_model(StepOutput(content=ms), SentimentReport)
+        assert result is None
 
-class TestComputePositionSizing:
-    def _parse_sizing(self, step_output) -> dict:
-        content = step_output.content if hasattr(step_output, 'content') else str(step_output)
-        block = _get_tagged_block(content, "SIZING_DATA")
-        assert block is not None, f"No SIZING_DATA block in: {content}"
-        return block
-
-    def test_positive_edge_yes_side(self):
-        context = (
-            '{"estimated_prob_of_side": 0.65, "market_prob_of_side": 0.50, '
-            '"recommended_side": "YES"}\n'
-            '{"gamma_market_id": "m1", "yes_book": {"token_id": "t1", "best_ask": 0.51, '
-            '"best_bid": 0.49, "spread": 0.02, "depth_10pct": 30000}, '
-            '"no_book": {"token_id": "t2", "best_ask": 0.50, "best_bid": 0.48, '
-            '"spread": 0.02, "depth_10pct": 25000}}'
-        )
-        sizing = self._parse_sizing(compute_position_sizing(_make_step_input(context)))
-        assert sizing["recommended_stake"] > 0
-        assert sizing["kelly_fraction_raw"] > 0
-        assert sizing["entry_price"] > 0.50  # should be above best_ask
-        assert sizing["force_skip"] is False
-        assert sizing["recommended_side"] == "YES"
-
-    def test_positive_edge_no_side(self):
-        """NO-side should use no_book for slippage/entry, not yes_book."""
-        context = (
-            '{"estimated_prob_of_side": 0.70, "market_prob_of_side": 0.55, '
-            '"recommended_side": "NO"}\n'
-            '{"gamma_market_id": "m1", "yes_book": {"token_id": "t1", "best_ask": 0.60, '
-            '"best_bid": 0.58, "spread": 0.02, "depth_10pct": 20000}, '
-            '"no_book": {"token_id": "t2", "best_ask": 0.42, "best_bid": 0.40, '
-            '"spread": 0.02, "depth_10pct": 20000}}'
-        )
-        sizing = self._parse_sizing(compute_position_sizing(_make_step_input(context)))
-        assert sizing["recommended_stake"] > 0
-        assert sizing["recommended_side"] == "NO"
-        # Entry price should be based on no_book.best_ask (~0.42), not yes_book
-        assert sizing["entry_price"] < 0.50
-
-    def test_no_edge_forces_skip(self):
-        context = '{"estimated_prob_of_side": 0.45, "market_prob_of_side": 0.50}'
-        sizing = self._parse_sizing(compute_position_sizing(_make_step_input(context)))
-        assert sizing["recommended_stake"] == 0.0
-        assert sizing["force_skip"] is True
-
-    def test_missing_data_forces_skip(self):
-        sizing = self._parse_sizing(compute_position_sizing("no useful data"))
-        assert sizing["force_skip"] is True
-
-    def test_slippage_exceeds_budget_forces_skip(self):
-        """If slippage > 2% of best_ask, stake must be zeroed (hard gate).
-
-        With depth_10pct=10 and a Kelly stake well above $10, the orderbook
-        walk will produce slippage far exceeding 2%.
-        """
-        context = (
-            '{"estimated_prob_of_side": 0.90, "market_prob_of_side": 0.50, '
-            '"recommended_side": "YES"}\n'
-            '{"gamma_market_id": "m1", "yes_book": {"token_id": "t1", "best_ask": 0.51, '
-            '"best_bid": 0.49, "spread": 0.02, "depth_10pct": 10}, '
-            '"no_book": {"token_id": "t2", "best_ask": 0.50, "best_bid": 0.48, '
-            '"spread": 0.02, "depth_10pct": 10}}'
-        )
-        sizing = self._parse_sizing(compute_position_sizing(_make_step_input(context)))
-        # depth_10pct=10 means only $10 in the book. Kelly stake at 90% vs 50%
-        # edge is ~$1000+. Walking a $1000 order through a $10 book produces
-        # massive slippage, which must trigger the hard gate unconditionally.
-        assert sizing["force_skip"] is True
-        assert "2%" in sizing.get("sizing_note", "")
-
-    def test_missing_orderbook_for_side_forces_skip(self):
-        """If no valid orderbook for the recommended side, force_skip must be True."""
-        # EventCandidate has no books at all
-        context = (
-            '{"estimated_prob_of_side": 0.70, "market_prob_of_side": 0.50, '
-            '"recommended_side": "YES"}\n'
-            '{"gamma_market_id": "m1"}'  # no yes_book or no_book
-        )
-        sizing = self._parse_sizing(compute_position_sizing(_make_step_input(context)))
-        assert sizing["force_skip"] is True
-        assert "orderbook" in sizing.get("sizing_note", "").lower()
-
-    def test_missing_no_book_forces_skip_for_no_side(self):
-        """If recommended_side=NO but no_book is missing, force_skip."""
-        context = (
-            '{"estimated_prob_of_side": 0.70, "market_prob_of_side": 0.50, '
-            '"recommended_side": "NO"}\n'
-            '{"gamma_market_id": "m1", "yes_book": {"token_id": "t1", "best_ask": 0.55, '
-            '"best_bid": 0.53, "spread": 0.02, "depth_10pct": 20000}}'
-            # no_book is missing entirely
-        )
-        sizing = self._parse_sizing(compute_position_sizing(_make_step_input(context)))
-        assert sizing["force_skip"] is True
-        assert "orderbook" in sizing.get("sizing_note", "").lower()
+    def test_none_returns_none(self):
+        assert _step_content_to_model(None, MarketSnapshot) is None
 
 
 # ---------------------------------------------------------------------------
-# Conditional Logging tests
-# ---------------------------------------------------------------------------
-
-
-class TestConditionalLogging:
-    def _parse_record(self, step_output) -> dict:
-        content = step_output.content if hasattr(step_output, 'content') else str(step_output)
-        block = _get_tagged_block(content, "RECORD_RESULT")
-        assert block is not None, f"No RECORD_RESULT block in: {content}"
-        return block
-
-    def test_skip_from_agent(self):
-        context = '{"action": "SKIP", "rationale": "No edge"}'
-        record = self._parse_record(conditional_logging(_make_step_input(context)))
-        assert record["action"] == "SKIP"
-        assert record["trade_id"] is None
-
-    def test_skip_from_sizing_force(self):
-        sizing_block = _emit_tagged_block("SIZING_DATA", {
-            "force_skip": True,
-            "sizing_note": "Slippage too high",
-            "recommended_stake": 0,
-        })
-        context = f'{sizing_block}\n{{"action": "BET", "stake": 500}}'
-        record = self._parse_record(conditional_logging(_make_step_input(context)))
-        assert record["action"] == "SKIP"
-        assert "Slippage" in record.get("reason", "")
-
-    def test_bet_with_zero_stake(self):
-        context = '{"action": "BET", "stake": 0, "side": "YES"}'
-        record = self._parse_record(conditional_logging(_make_step_input(context)))
-        assert record["action"] == "SKIP"
-        assert "zero stake" in record.get("reason", "").lower()
-
-    def test_agent_zero_stake_not_overridden_by_sizing(self):
-        """REGRESSION: If agent says stake=0, sizing.recommended_stake must NOT override it.
-
-        This ensures explicit zero from the Decision Agent is respected,
-        not silently replaced by the sizing fallback via falsy `or` logic.
-        """
-        sizing_block = _emit_tagged_block("SIZING_DATA", {
-            "force_skip": False,
-            "recommended_stake": 500,  # sizing says bet $500
-            "entry_price": 0.51,
-            "slippage_estimate": 0.01,
-        })
-        # Agent explicitly says stake=0 (meaning "I changed my mind, don't bet")
-        decision_json = json.dumps({
-            "action": "BET",
-            "condition_id": "0xzero",
-            "market_slug": "zero-test",
-            "token_id": "tzero",
-            "side": "YES",
-            "stake": 0,  # explicit zero — must be respected
-            "estimated_prob_of_side": 0.6,
-            "market_prob_of_side_at_entry": 0.5,
-            "edge": 0.1,
-            "entry_price": 0.51,
-            "slippage_estimate": 0.01,
-            "underlier_group": "btc_price",
-            "rationale": "Changed mind",
-            "confidence": "Low",
-        })
-        context = f"{sizing_block}\n{decision_json}"
-        record = self._parse_record(conditional_logging(_make_step_input(context)))
-        assert record["action"] == "SKIP"
-        assert "zero stake" in record.get("reason", "").lower()
-
-    def test_bet_records_trade_yes(self, tmp_path, monkeypatch):
-        """BET YES creates a paper trade in DB."""
-        from storage.paper_trades import PaperTradeStore
-
-        test_store = PaperTradeStore(f"sqlite:///{tmp_path / 'test.db'}")
-        monkeypatch.setattr("workflows.prediction_workflow.get_paper_trade_store", lambda: test_store)
-        monkeypatch.setattr(
-            "workflows.prediction_workflow.logger_agent",
-            type("Fake", (), {"run": lambda self, msg: type("R", (), {"content": "ok"})()})(),
-        )
-
-        sizing_block = _emit_tagged_block("SIZING_DATA", {
-            "force_skip": False, "recommended_stake": 450, "entry_price": 0.51, "slippage_estimate": 0.01,
-        })
-        decision_json = json.dumps({
-            "action": "BET", "condition_id": "0xyes", "market_slug": "btc-yes-test",
-            "token_id": "tyes", "side": "YES", "estimated_prob_of_side": 0.65,
-            "market_prob_of_side_at_entry": 0.50, "edge": 0.15, "entry_price": 0.51,
-            "slippage_estimate": 0.01, "stake": 450, "underlier_group": "btc_price",
-            "rationale": "Test", "exit_conditions": [], "confidence": "High",
-        })
-        event_json = '{"question": "Will BTC exceed $100K?"}'
-        context = f"{sizing_block}\n{decision_json}\n{event_json}"
-
-        record = self._parse_record(conditional_logging(_make_step_input(context)))
-        assert record["action"] == "BET"
-        assert record["trade_id"] is not None
-        assert record["side"] == "YES"
-        assert record["stake"] == 450
-
-        trades = test_store.get_open_trades()
-        assert len(trades) == 1
-        assert trades[0].side == "YES"
-
-    def test_bet_records_trade_no(self, tmp_path, monkeypatch):
-        """BET NO creates a paper trade with side=NO."""
-        from storage.paper_trades import PaperTradeStore
-
-        test_store = PaperTradeStore(f"sqlite:///{tmp_path / 'test.db'}")
-        monkeypatch.setattr("workflows.prediction_workflow.get_paper_trade_store", lambda: test_store)
-        monkeypatch.setattr(
-            "workflows.prediction_workflow.logger_agent",
-            type("Fake", (), {"run": lambda self, msg: type("R", (), {"content": "ok"})()})(),
-        )
-
-        sizing_block = _emit_tagged_block("SIZING_DATA", {
-            "force_skip": False, "recommended_stake": 300, "entry_price": 0.42, "slippage_estimate": 0.005,
-        })
-        decision_json = json.dumps({
-            "action": "BET", "condition_id": "0xno", "market_slug": "btc-no-test",
-            "token_id": "tno", "side": "NO", "estimated_prob_of_side": 0.70,
-            "market_prob_of_side_at_entry": 0.55, "edge": 0.15, "entry_price": 0.42,
-            "slippage_estimate": 0.005, "stake": 300, "underlier_group": "btc_price",
-            "rationale": "Bearish test", "exit_conditions": [], "confidence": "Medium",
-        })
-        context = f"{sizing_block}\n{decision_json}"
-
-        record = self._parse_record(conditional_logging(_make_step_input(context)))
-        assert record["action"] == "BET"
-        assert record["side"] == "NO"
-        assert record["stake"] == 300
-
-        trades = test_store.get_open_trades()
-        assert len(trades) == 1
-        assert trades[0].side == "NO"
-        assert trades[0].entry_fill_price == 0.42
-
-    def test_unclear_action(self):
-        record = self._parse_record(conditional_logging(_make_step_input("some random text")))
-        assert record["action"] == "SKIP"
-
-
-# ---------------------------------------------------------------------------
-# Remediation tests
+# ensure_data_quality tests
 # ---------------------------------------------------------------------------
 
 
 class TestEnsureDataQuality:
+    def test_all_present(self):
+        si = _make_step_input(**{
+            "Event Scan": _make_event_candidate(),
+            "Market Data": _make_market_snapshot(),
+            "News & Sentiment": _make_sentiment_report(),
+        })
+        result = _step_content_to_dict(ensure_data_quality(si))
+        assert result["force_skip"] is False
+        assert result["event_missing"] is False
+        assert result["market_data_missing"] is False
+        assert result["sentiment_missing"] is False
+
+    def test_missing_market(self):
+        si = _make_step_input(**{
+            "Event Scan": _make_event_candidate(),
+            "News & Sentiment": _make_sentiment_report(),
+        })
+        result = _step_content_to_dict(ensure_data_quality(si))
+        assert result["force_skip"] is True
+        assert result["market_data_missing"] is True
+        assert "MarketSnapshot" in result.get("skip_reason", "")
+
+    def test_missing_event(self):
+        si = _make_step_input(**{
+            "Market Data": _make_market_snapshot(),
+            "News & Sentiment": _make_sentiment_report(),
+        })
+        result = _step_content_to_dict(ensure_data_quality(si))
+        assert result["force_skip"] is True
+        assert result["event_missing"] is True
+
     def test_missing_sentiment_injects_fallback(self):
-        """No SentimentReport → neutral fallback injected."""
-        # Only market data present, no sentiment
-        context = '{"coin_id": "bitcoin", "price_usd": 67000, "signal": "Bullish"}'
-        result = ensure_data_quality(_make_step_input(context))
-        content = result.content
-        # Should have DATA_QUALITY tag
-        dq = _get_tagged_block(content, "DATA_QUALITY")
-        assert dq is not None
-        assert dq["force_skip"] is False
-        # Should have injected neutral sentiment
-        assert "fallback_no_search" in content
-        assert '"sentiment_score": 0.0' in content
+        si = _make_step_input(**{
+            "Event Scan": _make_event_candidate(),
+            "Market Data": _make_market_snapshot(),
+        })
+        result = _step_content_to_dict(ensure_data_quality(si))
+        assert result["force_skip"] is False
+        assert result["sentiment_missing"] is True
+        assert result["sentiment_fallback"]["sentiment_score"] == 0.0
 
-    def test_missing_market_data_forces_skip(self):
-        """No MarketSnapshot → force_skip, no synthetic data."""
-        # Only sentiment, no market data
-        context = '{"sentiment_score": 0.5, "confidence": 0.8, "query": "btc"}'
-        result = ensure_data_quality(_make_step_input(context))
-        dq = _get_tagged_block(result.content, "DATA_QUALITY")
-        assert dq is not None
-        assert dq["market_data_missing"] is True
-        assert dq["force_skip"] is True
-        # Should NOT contain synthetic market data
-        assert "coin_id" not in result.content or "fallback" not in result.content
+    def test_invalid_market_schema_forces_skip(self):
+        """Dict with wrong keys is not a valid MarketSnapshot."""
+        si = _make_step_input(**{
+            "Event Scan": _make_event_candidate(),
+            "Market Data": StepOutput(content={"wrong_key": 123}),  # not MarketSnapshot
+            "News & Sentiment": _make_sentiment_report(),
+        })
+        # _step_content_to_model will return None for invalid schema
+        result = _step_content_to_dict(ensure_data_quality(si))
+        assert result["force_skip"] is True
 
-    def test_both_present_passthrough(self):
-        """Both data sources present → no fallback, no force_skip."""
-        context = (
-            '{"coin_id": "bitcoin", "price_usd": 67000}\n'
-            '{"sentiment_score": 0.3, "confidence": 0.6, "query": "btc"}'
+    def test_invalid_sentiment_injects_fallback(self):
+        si = _make_step_input(**{
+            "Event Scan": _make_event_candidate(),
+            "Market Data": _make_market_snapshot(),
+            "News & Sentiment": StepOutput(content={"wrong_key": 123}),
+        })
+        result = _step_content_to_dict(ensure_data_quality(si))
+        assert result["force_skip"] is False
+        assert result["sentiment_missing"] is True
+        assert "sentiment_fallback" in result
+
+
+# ---------------------------------------------------------------------------
+# run_risk_assessment tests
+# ---------------------------------------------------------------------------
+
+
+class TestRunRiskAssessment:
+    def test_force_skip(self):
+        si = _make_step_input(**{
+            "Event Scan": _make_event_candidate(),
+            "Data Quality": {"force_skip": True, "skip_reason": "Market data missing"},
+        })
+        result = _step_content_to_model(run_risk_assessment(si), RiskAssessment)
+        assert result is not None
+        assert result.risk_rating == "Unacceptable"
+        assert "Market data" in result.warnings[0]
+
+    def test_missing_event_returns_safe(self):
+        si = _make_step_input(**{"Data Quality": {"force_skip": False}})
+        result = _step_content_to_model(run_risk_assessment(si), RiskAssessment)
+        assert result is not None
+        assert result.risk_rating == "Unacceptable"
+
+    def test_agent_exception_returns_safe(self, monkeypatch):
+        monkeypatch.setattr(
+            "workflows.prediction_workflow.risk_agent",
+            type("Fake", (), {"run": lambda self, msg: (_ for _ in ()).throw(RuntimeError("test"))})(),
         )
-        result = ensure_data_quality(_make_step_input(context))
-        dq = _get_tagged_block(result.content, "DATA_QUALITY")
-        assert dq is not None
-        assert dq["force_skip"] is False
-        assert dq["market_data_missing"] is False
-
-
-class TestSizingDataQualityGate:
-    def _parse_sizing(self, step_output) -> dict:
-        content = step_output.content if hasattr(step_output, 'content') else str(step_output)
-        block = _get_tagged_block(content, "SIZING_DATA")
-        assert block is not None
-        return block
-
-    def test_data_quality_force_skip_kills_sizing(self):
-        """DATA_QUALITY force_skip → sizing immediately returns force_skip."""
-        dq_block = _emit_tagged_block("DATA_QUALITY", {
-            "market_data_missing": True, "force_skip": True,
-            "skip_reason": "Market data missing",
+        si = _make_step_input(**{
+            "Event Scan": _make_event_candidate(),
+            "Market Data": _make_market_snapshot(),
+            "Data Quality": {"force_skip": False},
         })
-        # Even with valid risk data, sizing should skip
-        risk_json = '{"estimated_prob_of_side": 0.7, "market_prob_of_side": 0.5}'
-        context = f"{dq_block}\n{risk_json}"
-        sizing = self._parse_sizing(compute_position_sizing(_make_step_input(context)))
-        assert sizing["force_skip"] is True
-        assert "Market data" in sizing.get("sizing_note", "")
+        result = _step_content_to_model(run_risk_assessment(si), RiskAssessment)
+        assert result is not None
+        assert result.risk_rating == "Unacceptable"
+        assert "exception" in result.warnings[0].lower()
 
 
-class TestConditionalLoggingMarkdownFallback:
-    def _parse_record(self, step_output) -> dict:
-        content = step_output.content if hasattr(step_output, 'content') else str(step_output)
-        block = _get_tagged_block(content, "RECORD_RESULT")
-        assert block is not None
-        return block
+# ---------------------------------------------------------------------------
+# compute_position_sizing tests
+# ---------------------------------------------------------------------------
 
-    def test_parses_json_in_markdown_code_block(self):
-        """Decision output wrapped in ```json ... ``` → still parses."""
-        sizing_block = _emit_tagged_block("SIZING_DATA", {"force_skip": False})
-        decision = json.dumps({
-            "action": "SKIP", "condition_id": "0x1", "market_slug": "test",
-            "side": "YES", "stake": 0, "rationale": "test",
+
+class TestComputePositionSizing:
+    def _sizing(self, si) -> dict:
+        return _step_content_to_dict(compute_position_sizing(si))
+
+    def test_positive_edge(self):
+        si = _make_step_input(**{
+            "Data Quality": {"force_skip": False},
+            "Risk Assessment": _make_risk_assessment(),
+            "Event Scan": _make_event_candidate(),
         })
-        # Wrap in markdown code block
-        context = f'{sizing_block}\n```json\n{decision}\n```'
-        record = self._parse_record(conditional_logging(_make_step_input(context)))
-        assert record["action"] == "SKIP"
+        result = self._sizing(si)
+        assert result["force_skip"] is False
+        assert result["recommended_stake"] > 0
 
-    def test_force_skip_overrides_bet_decision(self, tmp_path, monkeypatch):
-        """SIZING_DATA.force_skip=true + Decision says BET → SKIP, no DB write."""
+    def test_dq_force_skip(self):
+        si = _make_step_input(**{
+            "Data Quality": {"force_skip": True, "skip_reason": "Missing data"},
+        })
+        result = self._sizing(si)
+        assert result["force_skip"] is True
+
+    def test_missing_risk_force_skip(self):
+        si = _make_step_input(**{
+            "Data Quality": {"force_skip": False},
+            "Event Scan": _make_event_candidate(),
+        })
+        result = self._sizing(si)
+        assert result["force_skip"] is True
+        assert "Risk" in result.get("sizing_note", "")
+
+    def test_missing_event_force_skip(self):
+        si = _make_step_input(**{
+            "Data Quality": {"force_skip": False},
+            "Risk Assessment": _make_risk_assessment(),
+        })
+        result = self._sizing(si)
+        assert result["force_skip"] is True
+
+    def test_no_edge_force_skip(self):
+        si = _make_step_input(**{
+            "Data Quality": {"force_skip": False},
+            "Risk Assessment": _make_risk_assessment(estimated_prob_of_side=0.40, market_prob_of_side=0.50, edge=-0.1),
+            "Event Scan": _make_event_candidate(),
+        })
+        result = self._sizing(si)
+        assert result["force_skip"] is True
+
+    def test_missing_orderbook_force_skip(self):
+        event = _make_event_candidate()
+        event.yes_book = TokenBook(token_id="t1", best_bid=0, best_ask=0, spread=0, depth_10pct=0)
+        si = _make_step_input(**{
+            "Data Quality": {"force_skip": False},
+            "Risk Assessment": _make_risk_assessment(),
+            "Event Scan": event,
+        })
+        result = self._sizing(si)
+        assert result["force_skip"] is True
+
+    def test_zero_prob_not_treated_as_missing(self):
+        """estimated_prob=0.0 is a valid value (not None)."""
+        si = _make_step_input(**{
+            "Data Quality": {"force_skip": False},
+            "Risk Assessment": _make_risk_assessment(estimated_prob_of_side=0.0),
+            "Event Scan": _make_event_candidate(),
+        })
+        result = self._sizing(si)
+        # Should reach edge check (0.0 <= 0.51), not "missing" check
+        assert result["force_skip"] is True
+        assert "edge" in result.get("sizing_note", "").lower() or "No positive" in result.get("sizing_note", "")
+
+    def test_invalid_recommended_side_force_skip(self):
+        si = _make_step_input(**{
+            "Data Quality": {"force_skip": False},
+            "Risk Assessment": _make_risk_assessment(recommended_side="MAYBE"),
+            "Event Scan": _make_event_candidate(),
+        })
+        result = self._sizing(si)
+        assert result["force_skip"] is True
+        assert "recommended_side" in result.get("sizing_note", "")
+
+
+# ---------------------------------------------------------------------------
+# run_decision tests
+# ---------------------------------------------------------------------------
+
+
+class TestRunDecision:
+    def test_force_skip_from_sizing(self):
+        si = _make_step_input(**{
+            "Event Scan": _make_event_candidate(),
+            "Position Sizing": {"force_skip": True, "sizing_note": "No edge"},
+        })
+        result = _step_content_to_model(run_decision(si), BetDecision)
+        assert result is not None
+        assert result.action == "SKIP"
+        assert result.stake == 0.0
+
+    def test_missing_event_returns_skip(self):
+        si = _make_step_input(**{
+            "Position Sizing": {"force_skip": False, "recommended_stake": 500},
+        })
+        result = _step_content_to_model(run_decision(si), BetDecision)
+        assert result is not None
+        assert result.action == "SKIP"
+
+    def test_agent_exception_returns_skip(self, monkeypatch):
+        monkeypatch.setattr(
+            "workflows.prediction_workflow.decision_agent",
+            type("Fake", (), {"run": lambda self, msg: (_ for _ in ()).throw(RuntimeError("test"))})(),
+        )
+        si = _make_step_input(**{
+            "Event Scan": _make_event_candidate(),
+            "Risk Assessment": _make_risk_assessment(),
+            "Position Sizing": {"force_skip": False},
+            "Market Data": _make_market_snapshot(),
+            "Data Quality": {"force_skip": False},
+        })
+        result = _step_content_to_model(run_decision(si), BetDecision)
+        assert result is not None
+        assert result.action == "SKIP"
+        assert "exception" in result.rationale.lower()
+
+    def test_uses_sentiment_fallback_from_dq(self, monkeypatch):
+        """When sentiment is None but DQ has fallback, prompt should include it."""
+        captured_prompts = []
+
+        class FakeAgent:
+            def run(self, msg):
+                captured_prompts.append(msg)
+                return type("R", (), {"content": _safe_bet_decision()})()
+
+        monkeypatch.setattr("workflows.prediction_workflow.decision_agent", FakeAgent())
+
+        si = _make_step_input(**{
+            "Event Scan": _make_event_candidate(),
+            "Risk Assessment": _make_risk_assessment(),
+            "Position Sizing": {"force_skip": False, "recommended_stake": 500},
+            "Market Data": _make_market_snapshot(),
+            "Data Quality": {
+                "force_skip": False,
+                "sentiment_fallback": {"query": "fallback", "sentiment_score": 0.0},
+            },
+        })
+        run_decision(si)
+        assert len(captured_prompts) == 1
+        assert "fallback" in captured_prompts[0]
+
+
+# ---------------------------------------------------------------------------
+# conditional_logging tests
+# ---------------------------------------------------------------------------
+
+
+class TestConditionalLogging:
+    def test_force_skip_from_sizing(self):
+        si = _make_step_input(**{
+            "Position Sizing": {"force_skip": True, "sizing_note": "No edge"},
+            "Decision": _safe_bet_decision(),
+        })
+        result = _step_content_to_dict(conditional_logging(si))
+        assert result["action"] == "SKIP"
+
+    def test_skip_decision(self):
+        si = _make_step_input(**{
+            "Position Sizing": {"force_skip": False},
+            "Decision": _safe_bet_decision(rationale="No edge detected"),
+        })
+        result = _step_content_to_dict(conditional_logging(si))
+        assert result["action"] == "SKIP"
+
+    def test_bet_records_trade(self, tmp_path, monkeypatch):
         from storage.paper_trades import PaperTradeStore
 
-        test_store = PaperTradeStore(f"sqlite:///{tmp_path / 'test_override.db'}")
-        monkeypatch.setattr("workflows.prediction_workflow.get_paper_trade_store", lambda: test_store)
+        store = PaperTradeStore(f"sqlite:///{tmp_path / 'test.db'}")
+        monkeypatch.setattr("workflows.prediction_workflow.get_paper_trade_store", lambda: store)
+        monkeypatch.setattr(
+            "workflows.prediction_workflow.logger_agent",
+            type("Fake", (), {"run": lambda self, msg: None})(),
+        )
 
-        sizing_block = _emit_tagged_block("SIZING_DATA", {
-            "force_skip": True, "sizing_note": "Data quality gate",
+        decision = BetDecision(
+            condition_id="0xbet", market_slug="btc-bet", token_id="tyes",
+            side="YES", action="BET", estimated_prob_of_side=0.65,
+            market_prob_of_side_at_entry=0.51, edge=0.14,
+            entry_price=0.52, slippage_estimate=0.01, stake=500.0,
+            underlier_group="btc_price", rationale="Strong edge",
+            exit_conditions=[], confidence="High",
+        )
+        si = _make_step_input(**{
+            "Position Sizing": {"force_skip": False},
+            "Decision": decision,
+            "Event Scan": _make_event_candidate(),
         })
-        decision = json.dumps({
-            "action": "BET", "condition_id": "0x1", "market_slug": "test",
-            "token_id": "t1", "side": "YES", "stake": 500,
-            "estimated_prob_of_side": 0.7, "market_prob_of_side_at_entry": 0.5,
-            "edge": 0.2, "entry_price": 0.51, "slippage_estimate": 0.01,
-            "underlier_group": "btc_price", "rationale": "test", "confidence": "High",
+        result = _step_content_to_dict(conditional_logging(si))
+        assert result["action"] == "BET"
+        assert result["trade_id"] is not None
+        assert store.get_open_trades()[0].side == "YES"
+
+    def test_force_skip_overrides_bet(self, tmp_path, monkeypatch):
+        """Even if Decision says BET, force_skip from sizing wins."""
+        from storage.paper_trades import PaperTradeStore
+
+        store = PaperTradeStore(f"sqlite:///{tmp_path / 'test.db'}")
+        monkeypatch.setattr("workflows.prediction_workflow.get_paper_trade_store", lambda: store)
+
+        decision = BetDecision(
+            condition_id="0xbet", market_slug="btc-bet", token_id="tyes",
+            side="YES", action="BET", estimated_prob_of_side=0.65,
+            market_prob_of_side_at_entry=0.51, edge=0.14,
+            entry_price=0.52, slippage_estimate=0.01, stake=500.0,
+            underlier_group="btc_price", rationale="Strong edge",
+            exit_conditions=[], confidence="High",
+        )
+        si = _make_step_input(**{
+            "Position Sizing": {"force_skip": True, "sizing_note": "Slippage too high"},
+            "Decision": decision,
         })
-        context = f"{sizing_block}\n{decision}"
-        record = self._parse_record(conditional_logging(_make_step_input(context)))
-        assert record["action"] == "SKIP"
-        assert record["trade_id"] is None
-        # No trade in DB
-        assert len(test_store.get_open_trades()) == 0
+        result = _step_content_to_dict(conditional_logging(si))
+        assert result["action"] == "SKIP"
+        assert len(store.get_open_trades()) == 0
+
+    def test_no_decision(self):
+        si = _make_step_input(**{"Position Sizing": {"force_skip": False}})
+        result = _step_content_to_dict(conditional_logging(si))
+        assert result["action"] == "SKIP"
+        assert "No valid" in result["reason"]
