@@ -16,6 +16,7 @@ from agents.settings import EXA_MCP_URL, XAI_MODEL_ID, team_knowledge, team_lear
 from context import COMMITTEE_CONTEXT
 from db import get_postgres_db
 from schemas.market import SentimentReport
+from schemas.market import SentimentReport
 
 agent_db = get_postgres_db()
 
@@ -72,6 +73,7 @@ news_agent = Agent(
         "\nsources_count, confidence (0 to 1)."
     ),
     tools=[MCPTools(url=EXA_MCP_URL)],
+    output_schema=SentimentReport,
     knowledge=team_knowledge,
     search_knowledge=True,
     learning=LearningMachine(
@@ -84,7 +86,7 @@ news_agent = Agent(
     add_datetime_to_context=True,
     add_history_to_context=True,
     num_history_runs=5,
-    markdown=True,
+    markdown=False,
     enable_agentic_memory=True,
 )
 

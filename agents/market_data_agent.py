@@ -68,6 +68,7 @@ market_data_agent = Agent(
         CoinglassTools(api_key=COINGLASS_API_KEY),
         FearGreedTools(),
     ],
+    output_schema=MarketSnapshot,
     knowledge=team_knowledge,
     search_knowledge=True,
     learning=LearningMachine(
@@ -80,7 +81,7 @@ market_data_agent = Agent(
     add_datetime_to_context=True,
     add_history_to_context=True,
     num_history_runs=5,
-    markdown=True,
+    markdown=False,
     enable_agentic_memory=True,
 )
 

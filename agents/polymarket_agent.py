@@ -69,15 +69,16 @@ polymarket_agent = Agent(
     name="Polymarket Agent",
     model=OpenAIChat(id="gpt-4o-mini"),
     db=agent_db,
-    instructions=_base_instructions + "\nReturn detailed data for ONE specific market including both YES and NO orderbooks.\nAlways include the full JSON with all fields: gamma_market_id, condition_id, market_slug, question, end_date, yes_book, no_book, market_prob_yes, volume_24h, total_liquidity.",
+    instructions=_base_instructions + "\nReturn detailed data for ONE specific market including both YES and NO orderbooks.",
     tools=_polymarket_tools,
+    output_schema=EventCandidate,
     knowledge=team_knowledge,
     search_knowledge=True,
     learning=_learning,
     add_datetime_to_context=True,
     add_history_to_context=True,
     num_history_runs=5,
-    markdown=True,
+    markdown=False,
     enable_agentic_memory=True,
 )
 

@@ -80,6 +80,7 @@ decision_agent = Agent(
         "\n\nIf Position Sizing indicates force_skip=true, you MUST return action=SKIP with"
         "\nstake=0, entry_price=0, slippage_estimate=0, token_id='' and safe defaults for all fields."
     ),
+    output_schema=BetDecision,
     knowledge=team_knowledge,
     search_knowledge=True,
     learning=LearningMachine(

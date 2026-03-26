@@ -15,6 +15,7 @@ from agno.learn import LearnedKnowledgeConfig, LearningMachine, LearningMode
 from agno.models.openai import OpenAIChat
 
 from agents.settings import team_knowledge, team_learnings
+from schemas.market import RiskAssessment
 from context import COMMITTEE_CONTEXT
 from db import get_postgres_db
 from schemas.market import RiskAssessment
@@ -84,6 +85,7 @@ risk_agent = Agent(
         "\nmarket_prob_of_side=0.5, edge=0, underlier_group=other,"
         "\nwarnings=[\"Market data missing\"], liquidity_ok=false, correlated_positions=0."
     ),
+    output_schema=RiskAssessment,
     knowledge=team_knowledge,
     search_knowledge=True,
     learning=LearningMachine(
