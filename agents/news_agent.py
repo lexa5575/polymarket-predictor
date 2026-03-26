@@ -73,6 +73,7 @@ news_agent = Agent(
     ),
     tools=[MCPTools(url=EXA_MCP_URL)],
     output_schema=SentimentReport,
+    use_json_mode=True,
     knowledge=team_knowledge,
     search_knowledge=True,
     learning=LearningMachine(

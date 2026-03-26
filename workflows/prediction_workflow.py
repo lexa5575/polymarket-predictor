@@ -82,10 +82,20 @@ def _step_content_to_model(
     if isinstance(content, model_class):
         return content
     try:
-        d = content.model_dump(mode="json") if hasattr(content, "model_dump") else content
-        return model_class.model_validate(d)
+        # Handle Pydantic model of different type
+        if hasattr(content, "model_dump"):
+            d = content.model_dump(mode="json")
+            return model_class.model_validate(d)
+        # Handle dict
+        if isinstance(content, dict):
+            return model_class.model_validate(content)
+        # Handle JSON string
+        if isinstance(content, str):
+            d = json.loads(content)
+            return model_class.model_validate(d)
     except Exception:
-        return None
+        pass
+    return None
 
 
 def _safe_risk_assessment(condition_id: str = "unknown", warnings: list[str] | None = None) -> RiskAssessment:
