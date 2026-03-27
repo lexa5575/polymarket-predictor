@@ -304,13 +304,13 @@ class TestPricePredictionRoute:
             "warnings": [],
         }
 
-        async def _fake_market_arun(msg):
+        async def _fake_market_arun(self, msg):
             return type("R", (), {"content": market_content})()
 
-        async def _fake_news_arun(msg):
+        async def _fake_news_arun(self, msg):
             return type("R", (), {"content": sentiment_content})()
 
-        async def _fake_risk_arun(msg):
+        async def _fake_risk_arun(self, msg):
             return type("R", (), {"content": risk_content})()
 
         monkeypatch.setattr(agents, "market_data_agent",
@@ -334,20 +334,20 @@ class TestPricePredictionRoute:
         """Verify that RiskEstimate.reasoning flows into PricePrediction.rationale."""
         import agents
 
-        async def _fake_market_arun(msg):
+        async def _fake_market_arun(self, msg):
             return type("R", (), {"content": {
                 "coin_id": "bitcoin", "price_usd": 67000.0, "change_24h_pct": 1.0,
                 "market_cap": 1e12, "fear_greed_index": 50,
                 "fear_greed_label": "Neutral", "signal": "Neutral",
             }})()
 
-        async def _fake_news_arun(msg):
+        async def _fake_news_arun(self, msg):
             return type("R", (), {"content": {
                 "query": "btc", "sentiment_score": 0.0,
                 "key_narratives": ["Mixed"], "sources_count": 3, "confidence": 0.5,
             }})()
 
-        async def _fake_risk_arun(msg):
+        async def _fake_risk_arun(self, msg):
             return type("R", (), {"content": {
                 "condition_id": "pp",
                 "recommended_side": "NO",

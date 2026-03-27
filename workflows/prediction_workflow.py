@@ -450,13 +450,14 @@ def compute_position_sizing(step_input: StepInput) -> StepOutput:
     if depth is None or depth <= 0:
         return StepOutput(content={"force_skip": True, "sizing_note": f"No depth in {side_key}"})
 
-    # --- Bankroll ---
+    # --- Bankroll --- FAIL-CLOSED on error
     try:
         store = get_paper_trade_store()
         snapshot = store.get_bankroll_snapshot()
         bankroll = snapshot.current_bankroll
-    except Exception:
-        bankroll = 10_000.0
+    except Exception as e:
+        logger.error("Cannot load bankroll for sizing: %s", e)
+        return StepOutput(content={"force_skip": True, "sizing_note": f"Cannot load bankroll: {e}"})
 
     max_stake = bankroll * 0.20
     estimated_prob = risk["estimated_prob_of_side"]
