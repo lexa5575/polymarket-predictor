@@ -348,10 +348,11 @@ class TestPricePredictionRoute:
             }})()
 
         async def _fake_risk_arun(self, msg):
+            # recommended_side=NO, P(NO wins)=0.65 → P(YES)=0.35 → prediction=NO
             return type("R", (), {"content": {
                 "condition_id": "pp",
                 "recommended_side": "NO",
-                "estimated_prob_of_side": 0.35,
+                "estimated_prob_of_side": 0.65,
                 "confidence": "Low",
                 "underlier_group": "btc_price",
                 "reasoning": "Macro headwinds outweigh bullish signals",
@@ -372,3 +373,6 @@ class TestPricePredictionRoute:
         data = resp.json()
         # reasoning should flow into rationale
         assert "headwinds" in data["rationale"].lower()
+        # recommended_side=NO with P(NO)=0.65 → P(YES)=0.35 → prediction=NO
+        assert data["prediction"] == "NO"
+        assert data["estimated_probability"] == 0.35

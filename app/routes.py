@@ -269,7 +269,16 @@ async def price_prediction(request: PricePredictionRequest):
         prediction = {"estimated_prob_of_side": 0.5, "risk_rating": "Unknown"}
 
     # 4. Parse prediction
-    est_prob = prediction.get("estimated_prob_of_side") or prediction.get("estimated_probability") or 0.5
+    # estimated_prob_of_side = P(recommended_side wins), NOT P(YES).
+    # Normalize to P(event will happen) = P(YES) for the response.
+    raw_prob = prediction.get("estimated_prob_of_side")
+    if raw_prob is None:
+        raw_prob = prediction.get("estimated_probability")
+    if raw_prob is None:
+        raw_prob = 0.5
+    recommended_side = prediction.get("recommended_side", "YES")
+    prob_yes = raw_prob if recommended_side == "YES" else 1.0 - raw_prob
+
     confidence = prediction.get("confidence") or prediction.get("risk_rating") or "Medium"
     if confidence not in ("High", "Medium", "Low"):
         confidence = "Medium"
@@ -286,8 +295,8 @@ async def price_prediction(request: PricePredictionRequest):
         price_target=request.price_target,
         direction=request.direction,
         timeframe=request.timeframe,
-        prediction="YES" if est_prob > 0.5 else "NO",
-        estimated_probability=round(est_prob, 3),
+        prediction="YES" if prob_yes > 0.5 else "NO",
+        estimated_probability=round(prob_yes, 3),
         confidence=confidence,
         signal=signal,
         fear_greed_index=fear_greed,
