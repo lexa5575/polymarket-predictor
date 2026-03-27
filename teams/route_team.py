@@ -36,7 +36,7 @@ route_team = Team(
         "- Polymarket odds/events/markets → Polymarket Agent",
         "- Crypto prices/funding/OI/Fear&Greed → Market Data Agent",
         "- News/sentiment/X-Twitter → News Agent",
-        "- Risk/edge/probability assessment → Risk Agent",
+        "- Probability estimation → Risk Agent",
         "- Past memos/research/strategies → Knowledge Agent",
         "- Write an audit memo → Logger Agent",
         "For actual BET/SKIP decisions with trade execution, use the prediction workflow — not this team.",

@@ -15,10 +15,10 @@ AgentOS (app/main.py)
 │   ├── Polymarket Agent        — single market details + orderbooks (GPT-4o-mini)
 │   ├── Market Data Agent       — CoinGecko + Coinglass + Fear&Greed (GPT-4o-mini)
 │   ├── News Agent              — sentiment from X/Twitter + web (Grok via xAI)
-│   ├── Risk Agent              — probability estimation + risk rating (GPT-4o)
+│   ├── Risk Agent              — probability estimation only (GPT-4o)
 │   ├── Knowledge Agent         — RAG research + memo archive (GPT-4o-mini)
 │   ├── Logger Agent            — audit memos only, no DB writes (GPT-4o-mini)
-│   └── Decision Agent          — BET/SKIP with stake (GPT-4o, workflow-only)
+│   └── Decision Agent          — DEPRECATED: debug/dev UI only (GPT-4o)
 │
 ├── Teams (4 analytical-only architectures)
 │   ├── Coordinate Team         — dynamic orchestration
@@ -28,8 +28,10 @@ AgentOS (app/main.py)
 │   NOTE: Teams are analytical only. All BET/SKIP decisions go through the workflow.
 │
 ├── Workflow
-│   └── Prediction Pipeline     — Event Scan → Data+News → Risk → Sizing → Decision → Record
+│   └── Prediction Pipeline     — Event Scan → Data+News → Risk (LLM) → Edge & Gate (code) → Sizing (code) → Decision (code) → Record
+│       ├── compute_edge_and_gate (deterministic: edge, liquidity, correlation, risk rating)
 │       ├── compute_position_sizing (deterministic: Kelly, slippage, entry price)
+│       ├── build_decision (deterministic: portfolio gates → BET/SKIP)
 │       └── conditional_logging (sole DB writer for paper trades)
 │
 ├── Custom Routes
@@ -39,12 +41,12 @@ AgentOS (app/main.py)
 │
 ├── Schemas (Pydantic contracts)
 │   ├── EventCandidate, BatchScanResult, MarketSnapshot, SentimentReport
-│   ├── RiskAssessment, BetDecision
+│   ├── RiskEstimate (LLM output), RiskAssessment (code-computed), BetDecision
 │   └── PaperTrade, BankrollSnapshot, PredictionRequest
 │
 ├── Storage (deterministic, no LLM)
 │   ├── PaperTradeStore — CRUD for paper trades (sole DB owner)
-│   ├── math_utils      — Kelly, Brier Score, PnL, slippage
+│   ├── math_utils      — Kelly, Brier, PnL, slippage, edge, liquidity, portfolio limits
 │   └── SQLAlchemy ORM  — paper_trades + bankroll_snapshots tables
 │
 └── Three-Layer Knowledge
@@ -55,12 +57,14 @@ AgentOS (app/main.py)
 
 ## Key Design Decisions
 
-1. **decision_agent is workflow-internal** — not registered in production AgentOS, only in dev mode
-2. **Teams are analytical only** — never produce BET/SKIP decisions or stake sizes
-3. **conditional_logging is the sole DB writer** — paper trades go through it exclusively
-4. **Math is deterministic** — Kelly, Brier, PnL, slippage computed in Python, never by LLM
-5. **Source of truth**: PostgreSQL paper_trades table. `memos/` = read-only audit artifacts
-6. **Structured handoff**: workflow function steps use tagged JSON blocks, not regex on text
+1. **LLM = forecast, Code = math + decision** — Risk Agent provides only probability estimate + confidence. Edge, risk rating, liquidity checks, portfolio gates, and BET/SKIP are all deterministic code
+2. **decision_agent is deprecated** — kept for debug/dev UI only, not in production workflow
+3. **Teams are analytical only** — never produce BET/SKIP decisions or stake sizes
+4. **conditional_logging is the sole DB writer** — paper trades go through it exclusively
+5. **Math is deterministic** — Kelly, Brier, PnL, slippage, edge, portfolio limits in Python, never by LLM
+6. **Source of truth**: PostgreSQL paper_trades table. `memos/` = read-only audit artifacts
+7. **Structured handoff**: workflow function steps use typed Pydantic models, not regex on text
+8. **Fail-closed**: DB errors in correlation checks and portfolio state → SKIP, not silent pass
 
 ## Environment Variables
 

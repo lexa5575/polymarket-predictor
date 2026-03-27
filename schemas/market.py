@@ -111,11 +111,46 @@ class SentimentReport(BaseModel):
     confidence: float = Field(..., ge=0.0, le=1.0)
 
 
-class RiskAssessment(BaseModel):
-    """Output of Risk Agent.
+class RiskEstimate(BaseModel):
+    """Output of Risk Agent (LLM). Only subjective fields — no math.
 
-    Provides qualitative risk analysis. Kelly/slippage/stake are computed
-    by the deterministic compute_position_sizing function step, not by this agent.
+    The LLM provides its probability estimate and confidence.
+    Edge, risk rating, liquidity, and correlation checks are computed
+    deterministically by the compute_edge_and_gate workflow step.
+    """
+
+    condition_id: str
+    recommended_side: Literal["YES", "NO"] = Field(
+        ...,
+        description="Which side the LLM recommends betting on",
+    )
+    estimated_prob_of_side: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="LLM estimate of P(recommended_side wins)",
+    )
+    confidence: Literal["High", "Medium", "Low"] = Field(
+        ...,
+        description="LLM confidence in the estimate",
+    )
+    underlier_group: str = Field(
+        ...,
+        description='"btc_price", "eth_price", "etf", "regulation", "other"',
+    )
+    reasoning: str = Field(
+        ...,
+        description="Why the LLM arrived at this estimate",
+    )
+    warnings: list[str] = Field(default_factory=list)
+
+
+class RiskAssessment(BaseModel):
+    """Code-computed risk assessment (assembled by compute_edge_and_gate).
+
+    Built deterministically from RiskEstimate (LLM output) + EventCandidate
+    (market data) + portfolio state (DB). Kelly/slippage/stake are computed
+    by the subsequent compute_position_sizing step.
     All probabilities are relative to recommended_side.
     """
 

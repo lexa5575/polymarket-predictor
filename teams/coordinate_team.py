@@ -38,7 +38,7 @@ coordinate_team = Team(
         "Dynamically decide which agents to consult based on the question.",
         "For prediction evaluations: start with Polymarket + Market Data agents, then News, then Risk.",
         "Always consult the Risk Agent before drawing any conclusions.",
-        "Provide ANALYTICAL RECOMMENDATIONS ONLY — probability estimates, edge, risk rating.",
+        "Provide ANALYTICAL RECOMMENDATIONS ONLY — probability estimates and analysis.",
         "NEVER output final BET/SKIP decisions or stake sizes. Those are computed by the prediction workflow.",
         "Your role is to gather and synthesize information, not to execute trades.",
     ],

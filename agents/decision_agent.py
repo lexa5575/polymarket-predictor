@@ -1,8 +1,11 @@
 """
-Decision Agent
---------------
+Decision Agent (DEPRECATED)
+----------------------------
 
-Final decision-maker: BET YES / BET NO / SKIP.
+Kept for debug/dev UI only. NOT used in the production prediction workflow.
+All BET/SKIP decisions are now made deterministically by build_decision()
+in workflows/prediction_workflow.py.
+
 Model: GPT-4o (strong reasoning). Tools: None.
 """
 
@@ -18,6 +21,10 @@ from schemas.market import BetDecision
 agent_db = get_postgres_db()
 
 instructions = f"""\
+⚠️ DEBUG ONLY — This agent is NOT part of the production prediction workflow.
+All BET/SKIP decisions are made by deterministic code (build_decision).
+This agent is retained for manual analysis in dev mode only.
+
 You are the Decision Agent on a crypto prediction team.
 
 ## Team Rules (ALWAYS FOLLOW)

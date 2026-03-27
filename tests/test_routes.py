@@ -261,3 +261,114 @@ class TestScanAndFanoutRoute:
         assert resp.status_code == 200
         data = resp.json()
         assert data["candidates_processed"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Price prediction route tests
+# ---------------------------------------------------------------------------
+
+
+class TestPricePredictionRoute:
+    """Tests for POST /api/price-prediction with RiskEstimate-shaped agent output."""
+
+    @pytest.fixture
+    def test_client(self):
+        from fastapi.testclient import TestClient
+        from app.routes import router
+        from fastapi import FastAPI
+
+        app = FastAPI()
+        app.include_router(router, prefix="/api")
+        return TestClient(app)
+
+    def test_price_prediction_basic(self, test_client, monkeypatch):
+        """Mock all three agents and verify response structure."""
+        import agents
+
+        market_content = {
+            "coin_id": "bitcoin", "price_usd": 67000.0, "change_24h_pct": 2.0,
+            "market_cap": 1_300_000_000_000, "fear_greed_index": 65,
+            "fear_greed_label": "Greed", "signal": "Bullish",
+        }
+        sentiment_content = {
+            "query": "btc 100k", "sentiment_score": 0.4,
+            "key_narratives": ["Bullish momentum"], "sources_count": 5, "confidence": 0.7,
+        }
+        risk_content = {
+            "condition_id": "price-pred",
+            "recommended_side": "YES",
+            "estimated_prob_of_side": 0.72,
+            "confidence": "High",
+            "underlier_group": "btc_price",
+            "reasoning": "Strong momentum and bullish sentiment support target",
+            "warnings": [],
+        }
+
+        async def _fake_market_arun(msg):
+            return type("R", (), {"content": market_content})()
+
+        async def _fake_news_arun(msg):
+            return type("R", (), {"content": sentiment_content})()
+
+        async def _fake_risk_arun(msg):
+            return type("R", (), {"content": risk_content})()
+
+        monkeypatch.setattr(agents, "market_data_agent",
+            type("A", (), {"arun": _fake_market_arun})())
+        monkeypatch.setattr(agents, "news_agent",
+            type("A", (), {"arun": _fake_news_arun})())
+        monkeypatch.setattr(agents, "risk_agent",
+            type("A", (), {"arun": _fake_risk_arun})())
+
+        resp = test_client.post("/api/price-prediction", json={
+            "coin": "bitcoin", "price_target": 100000, "direction": "above",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["prediction"] == "YES"
+        assert data["estimated_probability"] == 0.72
+        assert data["confidence"] == "High"
+        assert "momentum" in data["rationale"].lower()
+
+    def test_risk_agent_reasoning_in_rationale(self, test_client, monkeypatch):
+        """Verify that RiskEstimate.reasoning flows into PricePrediction.rationale."""
+        import agents
+
+        async def _fake_market_arun(msg):
+            return type("R", (), {"content": {
+                "coin_id": "bitcoin", "price_usd": 67000.0, "change_24h_pct": 1.0,
+                "market_cap": 1e12, "fear_greed_index": 50,
+                "fear_greed_label": "Neutral", "signal": "Neutral",
+            }})()
+
+        async def _fake_news_arun(msg):
+            return type("R", (), {"content": {
+                "query": "btc", "sentiment_score": 0.0,
+                "key_narratives": ["Mixed"], "sources_count": 3, "confidence": 0.5,
+            }})()
+
+        async def _fake_risk_arun(msg):
+            return type("R", (), {"content": {
+                "condition_id": "pp",
+                "recommended_side": "NO",
+                "estimated_prob_of_side": 0.35,
+                "confidence": "Low",
+                "underlier_group": "btc_price",
+                "reasoning": "Macro headwinds outweigh bullish signals",
+                "warnings": ["High uncertainty"],
+            }})()
+
+        monkeypatch.setattr(agents, "market_data_agent",
+            type("A", (), {"arun": _fake_market_arun})())
+        monkeypatch.setattr(agents, "news_agent",
+            type("A", (), {"arun": _fake_news_arun})())
+        monkeypatch.setattr(agents, "risk_agent",
+            type("A", (), {"arun": _fake_risk_arun})())
+
+        resp = test_client.post("/api/price-prediction", json={
+            "coin": "bitcoin", "price_target": 100000, "direction": "above",
+        })
+        assert resp.status_code == 200
+        data = resp.json()
+        # reasoning should flow into rationale
+        assert "headwinds" in data["rationale"].lower()

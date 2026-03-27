@@ -22,9 +22,9 @@ chat:
       - "What's X/Twitter saying about the Bitcoin ETF?"
 
     risk-agent:
-      - "Evaluate risk for betting YES on BTC $100K by June"
-      - "How many correlated BTC positions do we have?"
-      - "Is this market liquid enough for a $500 bet?"
+      - "What's the estimated probability for BTC $100K by June?"
+      - "Evaluate probability of ETH reaching $5K"
+      - "How confident are you in BTC hitting $150K?"
 
     knowledge-agent:
       - "What past memos do we have on file?"

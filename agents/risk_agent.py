@@ -2,12 +2,12 @@
 Risk Agent
 ----------
 
-Qualitative risk assessment and side recommendation.
-Model: GPT-4o (strong reasoning).
+Probability estimation only. Model: GPT-4o (strong reasoning).
 Tools: None — pure reasoning agent.
 
-NOTE: Does NOT compute Kelly/stake/slippage — that's done by the
-deterministic compute_position_sizing function step in the workflow.
+NOTE: This agent returns only RiskEstimate (estimated_prob, confidence, reasoning).
+Edge, risk rating, liquidity, and correlation checks are computed deterministically
+by the compute_edge_and_gate workflow step.
 """
 
 from agno.agent import Agent
@@ -15,15 +15,14 @@ from agno.learn import LearnedKnowledgeConfig, LearningMachine, LearningMode
 from agno.models.openai import OpenAIChat
 
 from agents.settings import team_knowledge, team_learnings
-from schemas.market import RiskAssessment
+from schemas.market import RiskEstimate
 from context import COMMITTEE_CONTEXT
 from db import get_postgres_db
-from schemas.market import RiskAssessment
 
 agent_db = get_postgres_db()
 
 instructions = f"""\
-You are the Risk Officer on a crypto prediction team.
+You are the Risk Analyst on a crypto prediction team.
 
 ## Team Rules (ALWAYS FOLLOW)
 
@@ -31,43 +30,36 @@ You are the Risk Officer on a crypto prediction team.
 
 ## Your Role
 
-You assess risk, recommend which side to bet on (YES or NO), estimate the
-true probability, and identify the underlier group for correlation tracking.
+You estimate the probability that a given side of a prediction market will win,
+and express your confidence in that estimate. You do NOT compute edge, risk ratings,
+or position sizes — those are handled by deterministic code after you.
 
 ### What You Do
-- Evaluate whether the market is mispriced (our estimated prob vs market prob)
-- Recommend **YES** or **NO** — whichever side has positive edge
-- Estimate the true probability of the recommended side winning
+- Evaluate whether the market is mispriced based on available evidence
+- Recommend **YES** or **NO** — whichever side you believe is more likely to win
+- Estimate the true probability of the recommended side winning (0.0 to 1.0)
+- Express your confidence in this estimate: **High**, **Medium**, or **Low**
 - Classify the event into an underlier_group for correlation tracking:
   - "btc_price" — BTC price target events
   - "eth_price" — ETH price target events
   - "etf" — ETF approval/rejection events
   - "regulation" — Regulatory decisions
   - "other" — Everything else
-- Assess liquidity: is the orderbook deep enough for our typical bet size?
-- Check how many correlated positions are already open (max 3 per group)
-- Provide a risk rating: **Low** / **Moderate** / **High** / **Unacceptable**
-
-### Risk Rating Guidelines
-- **Low**: Edge > 10%, good liquidity, < 2 correlated positions
-- **Moderate**: Edge 5-10%, adequate liquidity, 2 correlated positions
-- **High**: Edge near 5%, thin liquidity or 3 correlated positions
-- **Unacceptable**: Edge < 5%, poor liquidity, or would breach any mandate limit
+- Explain your reasoning clearly
+- Flag any qualitative warnings (e.g. "Event too close to resolution", "Ambiguous resolution criteria")
 
 ### Important
-- All probabilities are relative to your recommended_side
 - estimated_prob_of_side = your estimate of P(recommended_side wins)
-- market_prob_of_side = current market implied P(recommended_side)
-- edge = estimated_prob_of_side - market_prob_of_side
-- You do NOT compute Kelly, stake, or slippage — that happens after you
+- You do NOT compute edge, risk rating, Kelly, stake, or slippage — that happens after you
+- Focus on the quality of your probability estimate and the reasoning behind it
 
 ## Workflow
-1. Search learnings for relevant risk patterns.
+1. Search learnings for relevant patterns.
 2. Review the event details, market data, and sentiment.
-3. Determine which side has edge and estimate true probability.
-4. Classify underlier_group and check correlation.
-5. Assess overall risk and provide rating.
-6. Save any new risk insights as learnings.
+3. Determine which side is more likely and estimate true probability.
+4. Classify underlier_group for correlation tracking.
+5. Provide clear reasoning for your estimate.
+6. Save any new insights as learnings.
 """
 
 risk_agent = Agent(
@@ -78,14 +70,15 @@ risk_agent = Agent(
     instructions=instructions + (
         "\n\nCRITICAL: Your response must be a single raw JSON object with ALL required fields."
         "\nNo markdown. No explanation outside JSON."
-        "\nRequired: condition_id, risk_rating, recommended_side, estimated_prob_of_side,"
-        "\nmarket_prob_of_side, edge, underlier_group, warnings (array), liquidity_ok, correlated_positions."
+        "\nRequired: condition_id, recommended_side, estimated_prob_of_side,"
+        "\nconfidence, underlier_group, reasoning, warnings (array)."
         "\n\nIf market data is missing or unclear, return a COMPLETE valid JSON with:"
-        "\nrisk_rating=Unacceptable, recommended_side=YES, estimated_prob_of_side=0.5,"
-        "\nmarket_prob_of_side=0.5, edge=0, underlier_group=other,"
-        "\nwarnings=[\"Market data missing\"], liquidity_ok=false, correlated_positions=0."
+        "\nrecommended_side=YES, estimated_prob_of_side=0.5,"
+        "\nconfidence=Low, underlier_group=other,"
+        "\nreasoning=\"Insufficient data for reliable estimate\","
+        "\nwarnings=[\"Market data missing\"]."
     ),
-    output_schema=RiskAssessment,
+    output_schema=RiskEstimate,
     knowledge=team_knowledge,
     search_knowledge=True,
     learning=LearningMachine(
@@ -104,7 +97,7 @@ risk_agent = Agent(
 
 if __name__ == "__main__":
     risk_agent.print_response(
-        "Evaluate the risk of betting on BTC exceeding $100K by June 2026. "
+        "Evaluate the probability of BTC exceeding $100K by June 2026. "
         "Market prob YES is 0.45, orderbook depth is $50K, we have 1 open BTC position.",
         stream=True,
     )

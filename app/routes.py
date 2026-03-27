@@ -261,7 +261,7 @@ async def price_prediction(request: PricePredictionRequest):
             f"Key narratives: {json.dumps(narratives)}\n\n"
             f"Respond with your estimated probability (0-1) that {request.coin} "
             f"WILL be {request.direction} ${request.price_target:,.0f} in {request.timeframe}, "
-            f"plus your confidence (High/Medium/Low) and rationale."
+            f"plus your confidence (High/Medium/Low) and brief reasoning."
         )
         prediction = _extract_dict_from_response(risk_response)
     except Exception as e:
@@ -274,7 +274,8 @@ async def price_prediction(request: PricePredictionRequest):
     if confidence not in ("High", "Medium", "Low"):
         confidence = "Medium"
     rationale = (
-        prediction.get("rationale")
+        prediction.get("reasoning")
+        or prediction.get("rationale")
         or " | ".join(prediction.get("warnings", []))
         or f"Signal: {signal}, Sentiment: {sent_score}"
     )

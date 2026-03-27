@@ -5,10 +5,14 @@
 2. **Data Collection** (parallel):
    - Market Data Agent — crypto prices, funding rates, open interest, Fear & Greed index
    - News Agent — sentiment from X/Twitter, news, narratives (Grok + Exa search)
-3. **Risk Assessment** — Risk Agent evaluates edge, recommends side (YES/NO), rates risk
-4. **Position Sizing** — Deterministic step: Kelly criterion, slippage estimate, entry price
-5. **Decision** — Decision Agent: BET YES / BET NO / SKIP with stake and exit conditions
-6. **Logging** — If BET: record paper trade in DB + write audit memo. If SKIP: trace only.
+3. **Risk Assessment** — Risk Agent (LLM) estimates probability, confidence, and reasoning
+4. **Edge & Gate** — Deterministic code: computes edge, liquidity checks, correlation limits, risk rating
+5. **Position Sizing** — Deterministic step: Kelly criterion, slippage estimate, entry price
+6. **Decision** — Deterministic code: portfolio gates (circuit breaker, max positions, capital limits) → BET/SKIP
+7. **Logging** — If BET: record paper trade in DB + write audit memo. If SKIP: trace only.
+
+> **Principle:** LLM provides the forecast (probability + confidence). All math, risk checks,
+> and BET/SKIP decisions are made by deterministic Python code.
 
 ## Decision Framework
 - **BET YES:** Positive edge on YES outcome, acceptable risk, sufficient liquidity

@@ -4,6 +4,7 @@ from schemas.market import (
     EventCandidate,
     MarketSnapshot,
     RiskAssessment,
+    RiskEstimate,
     SentimentReport,
     TokenBook,
 )

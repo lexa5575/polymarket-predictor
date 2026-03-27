@@ -30,4 +30,7 @@
 ## Rebalancing
 - Review all open positions every 4 hours (automated scan)
 - Settlement check every 12 hours
-- Exit conditions from Decision Agent are monitored continuously
+- Exit conditions from the prediction workflow are monitored continuously
+
+> **Note:** Risk ratings, edge, liquidity checks, and portfolio gates are computed
+> deterministically by code in the prediction workflow, not by LLM agents.

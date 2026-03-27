@@ -1,5 +1,7 @@
 # Prediction Market Mandate
 
+> All constraints below are enforced by deterministic code in the prediction workflow.
+
 ## Fund Overview
 - **Bankroll:** $10,000 (paper trading)
 - **Asset Class:** Polymarket prediction markets — crypto category only

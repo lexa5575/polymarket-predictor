@@ -2,7 +2,7 @@
 Prediction Workflow — Structured Step-to-Step Handoff
 -----------------------------------------------------
 
-Pipeline: Event Scan → Data+News (parallel) → Data Quality → Risk → Sizing → Decision → Record
+Pipeline: Event Scan → Data+News (parallel) → Data Quality → Risk (LLM) → Edge & Gate (code) → Sizing (code) → Decision (code) → Record
 
 All steps after Data Collection are function-steps (executor=) that:
 1. Read typed outputs from prior steps via get_step_output()
@@ -23,7 +23,6 @@ from agno.workflow import Parallel, Step, Workflow
 from agno.workflow.types import StepInput, StepOutput
 
 from agents import (
-    decision_agent,
     logger_agent,
     market_data_agent,
     news_agent,
@@ -36,11 +35,17 @@ from schemas.market import (
     EventCandidate,
     MarketSnapshot,
     RiskAssessment,
+    RiskEstimate,
     SentimentReport,
 )
 from schemas.workflow_input import PredictionRequest
 from storage.math_utils import (
     calculate_entry_price,
+    check_liquidity,
+    check_portfolio_limits,
+    compute_edge,
+    confidence_to_score,
+    determine_risk_rating,
     estimate_slippage,
     fractional_kelly,
     kelly_criterion,
@@ -151,6 +156,64 @@ def _safe_bet_decision(
     )
 
 
+def _safe_risk_estimate(
+    condition_id: str = "unknown",
+    warnings: list[str] | None = None,
+) -> RiskEstimate:
+    """Create a safe Low-confidence RiskEstimate fallback."""
+    return RiskEstimate(
+        condition_id=condition_id,
+        recommended_side="YES",
+        estimated_prob_of_side=0.5,
+        confidence="Low",
+        underlier_group="other",
+        reasoning="Safe fallback — insufficient data",
+        warnings=warnings or ["Safe fallback"],
+    )
+
+
+def _extract_cid_slug(step_input: StepInput) -> tuple[str, str]:
+    """Safely extract condition_id and market_slug from Event Scan step."""
+    event = _step_content_to_model(step_input.get_step_output("Event Scan"), EventCandidate)
+    if event:
+        return event.condition_id, event.market_slug
+    return "unknown", "unknown"
+
+
+def _should_trade(
+    risk: RiskAssessment,
+    confidence_score: float,
+    snapshot,  # BankrollSnapshot
+    new_stake: float,
+) -> tuple[bool, list[str]]:
+    """Single source of truth for BET/SKIP decision.
+
+    Returns (should_bet, skip_reasons).
+    Aggregates risk.warnings so specific causes appear in rationale.
+    """
+    reasons: list[str] = []
+
+    # From compute_edge_and_gate (encoded in risk_rating + warnings)
+    if risk.risk_rating == "Unacceptable":
+        reasons.append(f"Risk rating: {risk.risk_rating}")
+        if risk.warnings:
+            reasons.extend(risk.warnings)
+
+    # Confidence gate
+    if confidence_score < 0.5:
+        reasons.append(f"Confidence score {confidence_score} below 0.5 minimum")
+
+    # Portfolio gates (circuit breaker, max positions, capital at risk, reserve)
+    portfolio_ok, portfolio_warnings = check_portfolio_limits(
+        snapshot=snapshot,
+        new_stake=new_stake,
+    )
+    if not portfolio_ok:
+        reasons.extend(portfolio_warnings)
+
+    return len(reasons) == 0, reasons
+
+
 # ---------------------------------------------------------------------------
 # Step: Data Quality Check
 # ---------------------------------------------------------------------------
@@ -194,7 +257,7 @@ def ensure_data_quality(step_input: StepInput) -> StepOutput:
 
 
 def run_risk_assessment(step_input: StepInput) -> StepOutput:
-    """Gather all data, call risk_agent with complete context, validate response."""
+    """Gather all data, call risk_agent, validate response as RiskEstimate."""
     event = _step_content_to_model(step_input.get_step_output("Event Scan"), EventCandidate)
     dq = _step_content_to_dict(step_input.get_step_output("Data Quality"))
     market = _step_content_to_model(step_input.get_step_output("Market Data"), MarketSnapshot)
@@ -210,17 +273,17 @@ def run_risk_assessment(step_input: StepInput) -> StepOutput:
 
     # Force skip from data quality
     if dq and dq.get("force_skip"):
-        return StepOutput(content=_safe_risk_assessment(
+        return StepOutput(content=_safe_risk_estimate(
             condition_id=event_d.get("condition_id", "unknown") if event_d else "unknown",
             warnings=[dq.get("skip_reason", "Data quality failure")],
         ))
 
     # Missing event (double-check even if DQ didn't catch it)
     if not event_d:
-        return StepOutput(content=_safe_risk_assessment(warnings=["EventCandidate not available"]))
+        return StepOutput(content=_safe_risk_estimate(warnings=["EventCandidate not available"]))
 
     prompt = (
-        f"Analyze this prediction market for risk:\n\n"
+        f"Estimate the probability for this prediction market:\n\n"
         f"Event:\n{json.dumps(event_d, indent=2)}\n\n"
         f"Market Data:\n{json.dumps(market_d, indent=2) if market_d else 'Not available'}\n\n"
         f"Sentiment:\n{json.dumps(sentiment_d, indent=2) if sentiment_d else 'Not available'}"
@@ -230,23 +293,122 @@ def run_risk_assessment(step_input: StepInput) -> StepOutput:
         response = risk_agent.run(prompt)
     except Exception as e:
         logger.error("Risk agent failed: %s", e)
-        return StepOutput(content=_safe_risk_assessment(
+        return StepOutput(content=_safe_risk_estimate(
             condition_id=event_d.get("condition_id", "unknown"),
             warnings=[f"Risk agent exception: {e}"],
         ))
 
     # Validate response type
-    if isinstance(response.content, RiskAssessment):
+    if isinstance(response.content, RiskEstimate):
         return StepOutput(content=response.content)
     try:
         d = response.content.model_dump(mode="json") if hasattr(response.content, "model_dump") else response.content
-        return StepOutput(content=RiskAssessment.model_validate(d))
+        return StepOutput(content=RiskEstimate.model_validate(d))
     except Exception:
         pass
 
-    return StepOutput(content=_safe_risk_assessment(
+    return StepOutput(content=_safe_risk_estimate(
         condition_id=event_d.get("condition_id", "unknown"),
         warnings=["Agent returned invalid response"],
+    ))
+
+
+# ---------------------------------------------------------------------------
+# Step: Edge & Gate (deterministic — builds RiskAssessment from RiskEstimate)
+# ---------------------------------------------------------------------------
+
+
+def compute_edge_and_gate(step_input: StepInput) -> StepOutput:
+    """Deterministic: compute edge, risk rating, liquidity, correlation.
+
+    Reads RiskEstimate (LLM output) + EventCandidate (market data).
+    Returns a full RiskAssessment for downstream steps.
+
+    Codifies rules from mandate.md and risk_policy.md:
+    - Edge >= 5%
+    - Depth >= $10K, volume >= $50K, spread <= 5%
+    - Correlated positions < 3
+    """
+    dq = _step_content_to_dict(step_input.get_step_output("Data Quality"))
+    if dq and dq.get("force_skip"):
+        return StepOutput(content=_safe_risk_assessment(
+            condition_id="unknown",
+            warnings=[dq.get("skip_reason", "Data quality failure")],
+        ))
+
+    estimate = _step_content_to_model(
+        step_input.get_step_output("Risk Assessment"), RiskEstimate)
+    event = _step_content_to_model(
+        step_input.get_step_output("Event Scan"), EventCandidate)
+
+    if not estimate or not event:
+        return StepOutput(content=_safe_risk_assessment(
+            warnings=["RiskEstimate or EventCandidate not available"],
+        ))
+
+    # Guard: condition_id mismatch between LLM and EventCandidate
+    if estimate.condition_id != event.condition_id:
+        return StepOutput(content=_safe_risk_assessment(
+            condition_id=event.condition_id,
+            warnings=[
+                f"condition_id mismatch: estimate={estimate.condition_id}, "
+                f"event={event.condition_id}",
+            ],
+        ))
+
+    # 1. Market prob — midpoint implied probability from Polymarket, NOT LLM.
+    #    Edge is analytical (midpoint). Execution price (best_ask + slippage)
+    #    is computed separately in compute_position_sizing.
+    if estimate.recommended_side == "YES":
+        market_prob = event.market_prob_yes
+        book = event.yes_book
+    else:
+        market_prob = 1.0 - event.market_prob_yes
+        book = event.no_book
+
+    # 2. Edge (code)
+    edge = compute_edge(estimate.estimated_prob_of_side, market_prob)
+
+    # 3. Composite liquidity check (code)
+    liquidity_ok, liquidity_warnings = check_liquidity(
+        depth_10pct=book.depth_10pct,
+        volume_24h=event.volume_24h,
+        spread=book.spread,
+    )
+
+    # 4. Correlated positions (code, from DB) — FAIL-CLOSED on error
+    try:
+        store = get_paper_trade_store()
+        correlated = store.get_correlated_count(estimate.underlier_group)
+    except Exception as e:
+        logger.error("Cannot check correlated positions: %s", e)
+        return StepOutput(content=_safe_risk_assessment(
+            condition_id=event.condition_id,
+            warnings=[f"DB error checking correlation: {e}"],
+        ))
+
+    # 5. Risk rating (code)
+    risk_rating = determine_risk_rating(edge, liquidity_ok, correlated)
+
+    # Collect all warnings: LLM warnings + code-generated warnings
+    all_warnings = list(estimate.warnings) + liquidity_warnings
+    if correlated >= 2:
+        all_warnings.append(
+            f"Correlated positions: {correlated}/3 in {estimate.underlier_group}")
+    if edge < 0.05:
+        all_warnings.append(f"Edge {edge:.1%} below 5% minimum")
+
+    return StepOutput(content=RiskAssessment(
+        condition_id=event.condition_id,
+        risk_rating=risk_rating,
+        recommended_side=estimate.recommended_side,
+        estimated_prob_of_side=estimate.estimated_prob_of_side,
+        market_prob_of_side=market_prob,
+        edge=edge,
+        underlier_group=estimate.underlier_group,
+        warnings=all_warnings,
+        liquidity_ok=liquidity_ok,
+        correlated_positions=correlated,
     ))
 
 
@@ -261,7 +423,7 @@ def compute_position_sizing(step_input: StepInput) -> StepOutput:
     if dq and dq.get("force_skip"):
         return StepOutput(content={"force_skip": True, "sizing_note": dq.get("skip_reason")})
 
-    risk_model = _step_content_to_model(step_input.get_step_output("Risk Assessment"), RiskAssessment)
+    risk_model = _step_content_to_model(step_input.get_step_output("Edge & Gate"), RiskAssessment)
     event_model = _step_content_to_model(step_input.get_step_output("Event Scan"), EventCandidate)
     risk = risk_model.model_dump(mode="json") if risk_model else None
     event = event_model.model_dump(mode="json") if event_model else None
@@ -337,63 +499,98 @@ def compute_position_sizing(step_input: StepInput) -> StepOutput:
 
 
 # ---------------------------------------------------------------------------
-# Step: Decision (fn-step wrapping agent)
+# Step: Decision (deterministic — replaces Decision Agent)
 # ---------------------------------------------------------------------------
 
 
-def run_decision(step_input: StepInput) -> StepOutput:
-    """Gather ALL data, call decision_agent with complete context, validate response."""
-    event = _step_content_to_model(step_input.get_step_output("Event Scan"), EventCandidate)
-    risk = _step_content_to_model(step_input.get_step_output("Risk Assessment"), RiskAssessment)
+def build_decision(step_input: StepInput) -> StepOutput:
+    """Deterministic: build BetDecision from risk + sizing + portfolio state.
+
+    No LLM call. Uses _should_trade() as single decision point.
+    """
     sizing = _step_content_to_dict(step_input.get_step_output("Position Sizing"))
-    market = _step_content_to_model(step_input.get_step_output("Market Data"), MarketSnapshot)
-    sentiment = _step_content_to_model(step_input.get_step_output("News & Sentiment"), SentimentReport)
+    if not sizing or sizing.get("force_skip"):
+        note = sizing.get("sizing_note", "Forced skip") if sizing else "No sizing data"
+        cid, slug = _extract_cid_slug(step_input)
+        return StepOutput(content=_safe_bet_decision(cid, slug, note))
 
-    dq = _step_content_to_dict(step_input.get_step_output("Data Quality"))
-    if not sentiment and dq and dq.get("sentiment_fallback"):
-        sentiment = dq["sentiment_fallback"]
+    risk = _step_content_to_model(
+        step_input.get_step_output("Edge & Gate"), RiskAssessment)
+    event = _step_content_to_model(
+        step_input.get_step_output("Event Scan"), EventCandidate)
+    estimate = _step_content_to_model(
+        step_input.get_step_output("Risk Assessment"), RiskEstimate)
 
-    event_d = event.model_dump(mode="json") if event else None
-    risk_d = risk.model_dump(mode="json") if risk else None
-    market_d = market.model_dump(mode="json") if market else None
-    sentiment_d = sentiment.model_dump(mode="json") if hasattr(sentiment, "model_dump") else sentiment
+    if not risk or not event:
+        cid, slug = _extract_cid_slug(step_input)
+        return StepOutput(content=_safe_bet_decision(cid, slug, "Missing risk or event data"))
 
-    cid = event_d.get("condition_id", "unknown") if event_d else "unknown"
-    slug = event_d.get("market_slug", "unknown") if event_d else "unknown"
+    confidence_val = estimate.confidence if estimate else "Low"
+    confidence_score = confidence_to_score(confidence_val)
+    new_stake = sizing.get("recommended_stake", 0.0)
 
-    # Force skip from sizing
-    if sizing and sizing.get("force_skip"):
-        return StepOutput(content=_safe_bet_decision(cid, slug, sizing.get("sizing_note", "Forced skip")))
-
-    # Missing event
-    if not event_d:
-        return StepOutput(content=_safe_bet_decision(rationale="EventCandidate not available"))
-
-    prompt = (
-        f"Make a final BET/SKIP decision:\n\n"
-        f"Event:\n{json.dumps(event_d, indent=2)}\n\n"
-        f"Market Data:\n{json.dumps(market_d, indent=2) if market_d else 'N/A'}\n\n"
-        f"Sentiment:\n{json.dumps(sentiment_d, indent=2) if sentiment_d else 'N/A'}\n\n"
-        f"Risk Assessment:\n{json.dumps(risk_d, indent=2) if risk_d else 'N/A'}\n\n"
-        f"Position Sizing:\n{json.dumps(sizing, indent=2) if sizing else 'N/A'}"
-    )
-
+    # Get portfolio state — FAIL-CLOSED on error
     try:
-        response = decision_agent.run(prompt)
+        store = get_paper_trade_store()
+        snapshot = store.get_bankroll_snapshot()
     except Exception as e:
-        logger.error("Decision agent failed: %s", e)
-        return StepOutput(content=_safe_bet_decision(cid, slug, f"Decision agent exception: {e}"))
+        logger.error("Cannot load portfolio state: %s", e)
+        cid, slug = _extract_cid_slug(step_input)
+        return StepOutput(content=_safe_bet_decision(
+            cid, slug, f"Cannot load portfolio state: {e}"))
 
-    # Validate response type
-    if isinstance(response.content, BetDecision):
-        return StepOutput(content=response.content)
-    try:
-        d = response.content.model_dump(mode="json") if hasattr(response.content, "model_dump") else response.content
-        return StepOutput(content=BetDecision.model_validate(d))
-    except Exception:
-        pass
+    # Single decision point
+    should_bet, skip_reasons = _should_trade(
+        risk=risk,
+        confidence_score=confidence_score,
+        snapshot=snapshot,
+        new_stake=new_stake,
+    )
+    action = "BET" if should_bet else "SKIP"
 
-    return StepOutput(content=_safe_bet_decision(cid, slug, "Agent returned invalid response"))
+    side = risk.recommended_side
+    book = event.yes_book if side == "YES" else event.no_book
+
+    # Rationale (template, not LLM)
+    reasoning_text = estimate.reasoning if estimate else ""
+    if action == "BET":
+        rationale = (
+            f"Edge {risk.edge:.1%} on {side}. "
+            f"Risk: {risk.risk_rating}. "
+            f"Confidence: {confidence_val}. "
+            f"{reasoning_text}"
+        )
+    else:
+        rationale = (
+            f"SKIP: {'; '.join(skip_reasons)}. "
+            f"Edge {risk.edge:.1%} on {side}. "
+            f"{reasoning_text}"
+        )
+
+    # Exit conditions (template, not LLM)
+    exit_conditions = [
+        "Exit if market probability moves against us by more than 15%",
+        "Exit if new information fundamentally changes the thesis",
+        "Hold until resolution if conditions remain stable",
+    ] if action == "BET" else []
+
+    return StepOutput(content=BetDecision(
+        condition_id=risk.condition_id,
+        market_slug=event.market_slug,
+        token_id=book.token_id if action == "BET" else "",
+        side=side,
+        action=action,
+        estimated_prob_of_side=risk.estimated_prob_of_side,
+        market_prob_of_side_at_entry=risk.market_prob_of_side,
+        edge=risk.edge,
+        entry_price=sizing.get("entry_price", 0.0) if action == "BET" else 0.0,
+        slippage_estimate=sizing.get("slippage_estimate", 0.0) if action == "BET" else 0.0,
+        stake=new_stake if action == "BET" else 0.0,
+        underlier_group=risk.underlier_group,
+        rationale=rationale,
+        exit_conditions=exit_conditions,
+        confidence=confidence_val,
+    ))
 
 
 # ---------------------------------------------------------------------------
@@ -461,9 +658,10 @@ prediction_workflow = Workflow(
             name="Data Collection",
         ),
         Step(name="Data Quality", executor=ensure_data_quality),
-        Step(name="Risk Assessment", executor=run_risk_assessment),
+        Step(name="Risk Assessment", executor=run_risk_assessment),   # LLM → RiskEstimate
+        Step(name="Edge & Gate", executor=compute_edge_and_gate),     # code → RiskAssessment
         Step(name="Position Sizing", executor=compute_position_sizing),
-        Step(name="Decision", executor=run_decision),
+        Step(name="Decision", executor=build_decision),               # code → BetDecision
         Step(name="Record", executor=conditional_logging),
     ],
 )

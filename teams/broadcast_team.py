@@ -34,7 +34,7 @@ broadcast_team = Team(
         "All agents have evaluated this prediction market simultaneously.",
         "Synthesize their perspectives into a unified analytical view.",
         "Note where agents agree and disagree on probability estimates.",
-        "Provide a RECOMMENDATION with estimated probability and risk rating.",
+        "Provide a RECOMMENDATION with estimated probability and analysis.",
         "NEVER output final BET/SKIP decisions or stake sizes. Those are computed by the prediction workflow.",
         "Weight the Risk Agent's warnings heavily in your assessment.",
     ],
