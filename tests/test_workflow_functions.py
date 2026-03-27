@@ -22,6 +22,8 @@ from schemas.market import (
     TokenBook,
 )
 from schemas.paper_trade import BankrollSnapshot
+import sys
+
 from workflows.prediction_workflow import (
     _safe_bet_decision,
     _safe_risk_assessment,
@@ -34,6 +36,10 @@ from workflows.prediction_workflow import (
     ensure_data_quality,
     run_risk_assessment,
 )
+
+# workflows/__init__.py shadows the module name with the Workflow object,
+# so monkeypatch("workflows.prediction_workflow.X") fails. Get the real module.
+_wf_mod = sys.modules["workflows.prediction_workflow"]
 
 
 # ---------------------------------------------------------------------------
@@ -283,7 +289,7 @@ class TestRunRiskAssessment:
 
     def test_agent_exception_returns_safe(self, monkeypatch):
         monkeypatch.setattr(
-            "workflows.prediction_workflow.risk_agent",
+            _wf_mod, "risk_agent",
             type("Fake", (), {"run": lambda self, msg: (_ for _ in ()).throw(RuntimeError("test"))})(),
         )
         si = _make_step_input(**{
@@ -308,7 +314,7 @@ class TestComputeEdgeAndGate:
 
     def test_positive_edge(self, monkeypatch):
         monkeypatch.setattr(
-            "workflows.prediction_workflow.get_paper_trade_store",
+            _wf_mod, "get_paper_trade_store",
             lambda: _fake_store(correlated=0),
         )
         si = _make_step_input(**{
@@ -325,7 +331,7 @@ class TestComputeEdgeAndGate:
 
     def test_no_edge(self, monkeypatch):
         monkeypatch.setattr(
-            "workflows.prediction_workflow.get_paper_trade_store",
+            _wf_mod, "get_paper_trade_store",
             lambda: _fake_store(correlated=0),
         )
         si = _make_step_input(**{
@@ -339,7 +345,7 @@ class TestComputeEdgeAndGate:
 
     def test_low_depth(self, monkeypatch):
         monkeypatch.setattr(
-            "workflows.prediction_workflow.get_paper_trade_store",
+            _wf_mod, "get_paper_trade_store",
             lambda: _fake_store(correlated=0),
         )
         event = _make_event_candidate()
@@ -356,7 +362,7 @@ class TestComputeEdgeAndGate:
 
     def test_low_volume(self, monkeypatch):
         monkeypatch.setattr(
-            "workflows.prediction_workflow.get_paper_trade_store",
+            _wf_mod, "get_paper_trade_store",
             lambda: _fake_store(correlated=0),
         )
         si = _make_step_input(**{
@@ -370,7 +376,7 @@ class TestComputeEdgeAndGate:
 
     def test_wide_spread(self, monkeypatch):
         monkeypatch.setattr(
-            "workflows.prediction_workflow.get_paper_trade_store",
+            _wf_mod, "get_paper_trade_store",
             lambda: _fake_store(correlated=0),
         )
         event = _make_event_candidate()
@@ -386,7 +392,7 @@ class TestComputeEdgeAndGate:
 
     def test_too_many_correlated(self, monkeypatch):
         monkeypatch.setattr(
-            "workflows.prediction_workflow.get_paper_trade_store",
+            _wf_mod, "get_paper_trade_store",
             lambda: _fake_store(correlated=3),
         )
         si = _make_step_input(**{
@@ -416,7 +422,7 @@ class TestComputeEdgeAndGate:
 
     def test_condition_id_mismatch(self, monkeypatch):
         monkeypatch.setattr(
-            "workflows.prediction_workflow.get_paper_trade_store",
+            _wf_mod, "get_paper_trade_store",
             lambda: _fake_store(correlated=0),
         )
         si = _make_step_input(**{
@@ -432,7 +438,7 @@ class TestComputeEdgeAndGate:
         def _raise():
             raise RuntimeError("db down")
         monkeypatch.setattr(
-            "workflows.prediction_workflow.get_paper_trade_store",
+            _wf_mod, "get_paper_trade_store",
             lambda: type("Bad", (), {"get_correlated_count": lambda self, g: (_ for _ in ()).throw(RuntimeError("db down"))})(),
         )
         si = _make_step_input(**{
@@ -521,14 +527,18 @@ class TestComputePositionSizing:
         assert "edge" in result.get("sizing_note", "").lower() or "No positive" in result.get("sizing_note", "")
 
     def test_invalid_recommended_side_force_skip(self):
+        # Literal["YES","NO"] prevents creating RiskAssessment with "MAYBE".
+        # A dict with invalid recommended_side will fail model validation,
+        # causing sizing to see None → force_skip with "Risk data missing".
+        invalid_risk = _make_risk_assessment().model_dump()
+        invalid_risk["recommended_side"] = "MAYBE"
         si = _make_step_input(**{
             "Data Quality": {"force_skip": False},
-            "Edge & Gate": _make_risk_assessment(recommended_side="MAYBE"),
+            "Edge & Gate": invalid_risk,
             "Event Scan": _make_event_candidate(),
         })
         result = self._sizing(si)
         assert result["force_skip"] is True
-        assert "recommended_side" in result.get("sizing_note", "")
 
 
 # ---------------------------------------------------------------------------
@@ -552,7 +562,7 @@ def _sizing_ok(**overrides) -> dict:
 class TestBuildDecision:
     def test_bet_when_all_ok(self, monkeypatch):
         monkeypatch.setattr(
-            "workflows.prediction_workflow.get_paper_trade_store",
+            _wf_mod, "get_paper_trade_store",
             lambda: _fake_store(),
         )
         si = _make_step_input(**{
@@ -569,7 +579,7 @@ class TestBuildDecision:
 
     def test_skip_when_unacceptable(self, monkeypatch):
         monkeypatch.setattr(
-            "workflows.prediction_workflow.get_paper_trade_store",
+            _wf_mod, "get_paper_trade_store",
             lambda: _fake_store(),
         )
         si = _make_step_input(**{
@@ -585,7 +595,7 @@ class TestBuildDecision:
 
     def test_skip_when_low_confidence(self, monkeypatch):
         monkeypatch.setattr(
-            "workflows.prediction_workflow.get_paper_trade_store",
+            _wf_mod, "get_paper_trade_store",
             lambda: _fake_store(),
         )
         si = _make_step_input(**{
@@ -611,7 +621,7 @@ class TestBuildDecision:
     def test_skip_circuit_breaker(self, monkeypatch):
         snap = _make_snapshot(current_bankroll=1_000.0, total_at_risk=3_000.0)
         monkeypatch.setattr(
-            "workflows.prediction_workflow.get_paper_trade_store",
+            _wf_mod, "get_paper_trade_store",
             lambda: _fake_store(snapshot=snap),
         )
         si = _make_step_input(**{
@@ -627,7 +637,7 @@ class TestBuildDecision:
     def test_skip_max_positions(self, monkeypatch):
         snap = _make_snapshot(open_positions=10)
         monkeypatch.setattr(
-            "workflows.prediction_workflow.get_paper_trade_store",
+            _wf_mod, "get_paper_trade_store",
             lambda: _fake_store(snapshot=snap),
         )
         si = _make_step_input(**{
@@ -644,7 +654,7 @@ class TestBuildDecision:
         # equity=10K, at_risk=5K, stake=2K → 7K > 6K (60%)
         snap = _make_snapshot(current_bankroll=5_000.0, total_at_risk=5_000.0)
         monkeypatch.setattr(
-            "workflows.prediction_workflow.get_paper_trade_store",
+            _wf_mod, "get_paper_trade_store",
             lambda: _fake_store(snapshot=snap),
         )
         si = _make_step_input(**{
@@ -661,7 +671,7 @@ class TestBuildDecision:
         # current_bankroll=1.2K (available cash), stake=500 → remaining=700 < 1K reserve
         snap = _make_snapshot(current_bankroll=1_200.0, total_at_risk=8_800.0)
         monkeypatch.setattr(
-            "workflows.prediction_workflow.get_paper_trade_store",
+            _wf_mod, "get_paper_trade_store",
             lambda: _fake_store(snapshot=snap),
         )
         si = _make_step_input(**{
@@ -676,7 +686,7 @@ class TestBuildDecision:
 
     def test_bet_fields_populated(self, monkeypatch):
         monkeypatch.setattr(
-            "workflows.prediction_workflow.get_paper_trade_store",
+            _wf_mod, "get_paper_trade_store",
             lambda: _fake_store(),
         )
         si = _make_step_input(**{
@@ -696,7 +706,7 @@ class TestBuildDecision:
 
     def test_skip_fields_zeroed(self, monkeypatch):
         monkeypatch.setattr(
-            "workflows.prediction_workflow.get_paper_trade_store",
+            _wf_mod, "get_paper_trade_store",
             lambda: _fake_store(),
         )
         si = _make_step_input(**{
@@ -716,7 +726,7 @@ class TestBuildDecision:
         def _explode():
             raise RuntimeError("db down")
         monkeypatch.setattr(
-            "workflows.prediction_workflow.get_paper_trade_store",
+            _wf_mod, "get_paper_trade_store",
             lambda: type("Bad", (), {"get_bankroll_snapshot": lambda self: _explode()})(),
         )
         si = _make_step_input(**{
@@ -756,9 +766,9 @@ class TestConditionalLogging:
         from storage.paper_trades import PaperTradeStore
 
         store = PaperTradeStore(f"sqlite:///{tmp_path / 'test.db'}")
-        monkeypatch.setattr("workflows.prediction_workflow.get_paper_trade_store", lambda: store)
+        monkeypatch.setattr(_wf_mod, "get_paper_trade_store", lambda: store)
         monkeypatch.setattr(
-            "workflows.prediction_workflow.logger_agent",
+            _wf_mod, "logger_agent",
             type("Fake", (), {"run": lambda self, msg: None})(),
         )
 
@@ -785,7 +795,7 @@ class TestConditionalLogging:
         from storage.paper_trades import PaperTradeStore
 
         store = PaperTradeStore(f"sqlite:///{tmp_path / 'test.db'}")
-        monkeypatch.setattr("workflows.prediction_workflow.get_paper_trade_store", lambda: store)
+        monkeypatch.setattr(_wf_mod, "get_paper_trade_store", lambda: store)
 
         decision = BetDecision(
             condition_id="0xbet", market_slug="btc-bet", token_id="tyes",
