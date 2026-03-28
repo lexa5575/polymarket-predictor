@@ -16,7 +16,7 @@
 
 ## Constraints
 - Maximum 10 open positions at any time
-- Minimum market liquidity: $50K 24h volume AND orderbook depth > $10K
+- Minimum market liquidity: $15K 24h volume AND orderbook depth > $10K
 - Must maintain 10% bankroll reserve ($1,000) — never risk more than 90%
 - Minimum edge: |estimated_prob - market_prob| >= 5%
 
