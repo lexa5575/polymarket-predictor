@@ -80,7 +80,7 @@ class TestCheckLiquidity:
         assert any("depth" in w.lower() for w in warnings)
 
     def test_low_volume(self):
-        ok, warnings = check_liquidity(depth_10pct=20_000, volume_24h=30_000, spread=0.02)
+        ok, warnings = check_liquidity(depth_10pct=20_000, volume_24h=20_000, spread=0.02)
         assert ok is False
         assert any("volume" in w.lower() for w in warnings)
 
@@ -90,7 +90,7 @@ class TestCheckLiquidity:
         assert any("spread" in w.lower() for w in warnings)
 
     def test_multiple_failures(self):
-        ok, warnings = check_liquidity(depth_10pct=5_000, volume_24h=30_000, spread=0.06)
+        ok, warnings = check_liquidity(depth_10pct=5_000, volume_24h=20_000, spread=0.06)
         assert ok is False
         assert len(warnings) == 3
 

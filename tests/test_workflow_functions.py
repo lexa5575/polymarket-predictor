@@ -419,7 +419,7 @@ class TestComputeEdgeAndGate:
         si = _make_step_input(**{
             "Data Quality": {"force_skip": False},
             "Risk Assessment": _make_risk_estimate(),
-            "Event Scan": _make_event_candidate(volume_24h=30_000.0),
+            "Event Scan": _make_event_candidate(volume_24h=20_000.0),
         })
         result = self._gate(si)
         assert result.risk_rating == "Unacceptable"

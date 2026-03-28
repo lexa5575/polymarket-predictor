@@ -24,7 +24,6 @@ from agno.workflow.types import StepInput, StepOutput
 
 from agents import (
     logger_agent,
-    market_data_agent,
     risk_agent,
 )
 from agents.settings import get_paper_trade_store
@@ -330,6 +329,29 @@ def run_event_scan(step_input: StepInput) -> StepOutput:
     except Exception as e:
         logger.error("Event Scan failed: %s", e)
         return StepOutput(content=None)
+
+
+# ---------------------------------------------------------------------------
+# Step: Market Data (deterministic — no LLM)
+# ---------------------------------------------------------------------------
+
+
+def run_market_data(step_input: StepInput) -> StepOutput:
+    """Deterministic market data fetch. Thin wrapper over market_data_service."""
+    from app.market_data_service import fetch_market_snapshot
+    from storage.supported_assets import match_asset
+
+    event = _step_content_to_model(step_input.get_step_output("Event Scan"), EventCandidate)
+    if not event:
+        return StepOutput(content=None)
+
+    asset = match_asset(event.question)
+    if not asset:
+        logger.warning("Unsupported asset for question: %s", event.question)
+        return StepOutput(content=None)
+
+    snapshot = fetch_market_snapshot(asset["coin_id"], asset["symbol"])
+    return StepOutput(content=snapshot)
 
 
 # ---------------------------------------------------------------------------
@@ -792,7 +814,7 @@ prediction_workflow = Workflow(
     steps=[
         Step(name="Event Scan", executor=run_event_scan),
         Parallel(
-            Step(name="Market Data", agent=market_data_agent),  # type: ignore[arg-type]
+            Step(name="Market Data", executor=run_market_data),
             Step(name="News & Sentiment", executor=run_news_sentiment),
             name="Data Collection",
         ),

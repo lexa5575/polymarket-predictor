@@ -206,15 +206,13 @@ class TestSettleRoute:
 
 class TestScanAndFanoutRoute:
     def test_scan_returns_results(self, test_client, monkeypatch):
-        """Test /api/scan-and-fanout by monkeypatching the real dependencies."""
+        """Test /api/scan-and-fanout with deterministic scanner."""
         client, store = test_client
 
-        fake_candidate = type("C", (), {
-            "condition_id": "0xscan1",
-            "question": "Will BTC hit $100K?",
-        })()
-        fake_scan_content = type("Content", (), {"candidates": [fake_candidate]})()
-        fake_scan_result = type("R", (), {"content": fake_scan_content})()
+        # Mock scan_candidates (now deterministic, no LLM)
+        monkeypatch.setattr("app.scanner_service.scan_candidates", lambda max_candidates: [
+            {"condition_id": "0xscan1", "question": "Will BTC hit $100K?"},
+        ])
 
         # Workflow returns StepOutput with plain dict (from conditional_logging)
         fake_wf_result = type("WF", (), {"content": {
@@ -223,13 +221,7 @@ class TestScanAndFanoutRoute:
             "side": "YES",
             "stake": 300,
         }})()
-
-        import agents
         import workflows
-        monkeypatch.setattr(
-            agents, "polymarket_scanner",
-            type("Scanner", (), {"run": lambda self, msg: fake_scan_result})(),
-        )
         monkeypatch.setattr(
             workflows, "prediction_workflow",
             type("Workflow", (), {"run": lambda self, **kw: fake_wf_result})(),
@@ -247,15 +239,7 @@ class TestScanAndFanoutRoute:
     def test_scan_no_candidates(self, test_client, monkeypatch):
         """If scanner returns no candidates, route should report that."""
         client, _ = test_client
-
-        fake_scan_content = type("Content", (), {"candidates": []})()
-        fake_scan_result = type("R", (), {"content": fake_scan_content})()
-
-        import agents
-        monkeypatch.setattr(
-            agents, "polymarket_scanner",
-            type("Scanner", (), {"run": lambda self, msg: fake_scan_result})(),
-        )
+        monkeypatch.setattr("app.scanner_service.scan_candidates", lambda max_candidates: [])
 
         resp = client.post("/api/scan-and-fanout")
         assert resp.status_code == 200

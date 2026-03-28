@@ -1,10 +1,12 @@
 """
-Market Data Agent
------------------
+Market Data Agent (DEPRECATED)
+-------------------------------
 
-Aggregates crypto market data from CoinGecko, Coinglass, and Fear & Greed Index.
-Graceful degradation if Coinglass is unavailable (fields become None).
-Tools: CoinGeckoTools, CoinglassTools, FearGreedTools.
+Kept for dev UI and team-mode analysis only.
+NOT used in production workflow or scan-and-fanout.
+
+All market data for betting decisions comes from app/market_data_service.py
+(deterministic fetch from CoinGecko + Binance + Fear & Greed).
 """
 
 from agno.agent import Agent

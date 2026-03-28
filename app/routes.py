@@ -50,54 +50,47 @@ def _extract_record(wf_result) -> dict:
 
 
 @router.post("/scan-and-fanout")
-async def scan_and_fanout(max_candidates: int = 5):
+async def scan_and_fanout(max_candidates: int = 20):
     """Job 1: Scan crypto markets → fan-out prediction workflow runs.
 
-    Calls polymarket_scanner programmatically, then runs the prediction
-    workflow for each candidate. No self-POST — all in-process.
+    Deterministic candidate selection (no LLM scanner).
+    Only supported assets with sufficient liquidity are processed.
     """
-    from agents import polymarket_scanner
+    from app.scanner_service import scan_candidates
     from workflows import prediction_workflow
 
-    # 1. Scan for candidates
-    scan_result = polymarket_scanner.run(
-        f"Scan active crypto prediction markets. Return top {max_candidates} candidates "
-        "ranked by liquidity and potential edge."
-    )
+    # 1. Deterministic scan — no LLM
+    candidates = scan_candidates(max_candidates=max_candidates)
 
     # 2. Fan-out: run workflow for each candidate
     results = []
-    if scan_result and scan_result.content:
-        content = scan_result.content
-        # If structured output, iterate candidates
-        candidates = getattr(content, "candidates", None)
-        if candidates:
-            for candidate in candidates[:max_candidates]:
-                try:
-                    wf_result = prediction_workflow.run(
-                        input=PredictionRequest(
-                            mode="single_market",
-                            condition_id=candidate.condition_id,
-                        )
-                    )
-                    record = _extract_record(wf_result)
+    for candidate in candidates:
+        try:
+            wf_result = prediction_workflow.run(
+                input=PredictionRequest(
+                    mode="single_market",
+                    condition_id=candidate["condition_id"],
+                )
+            )
+            record = _extract_record(wf_result)
 
-                    results.append({
-                        "condition_id": candidate.condition_id,
-                        "question": candidate.question,
-                        "status": "completed",
-                        "action": record.get("action", "unknown"),
-                        "trade_id": record.get("trade_id"),
-                        "side": record.get("side"),
-                        "stake": record.get("stake"),
-                        "reason": record.get("reason"),
-                    })
-                except Exception as e:
-                    results.append({
-                        "condition_id": candidate.condition_id,
-                        "status": "error",
-                        "error": str(e),
-                    })
+            results.append({
+                "condition_id": candidate["condition_id"],
+                "question": candidate["question"],
+                "status": "completed",
+                "action": record.get("action", "unknown"),
+                "trade_id": record.get("trade_id"),
+                "side": record.get("side"),
+                "stake": record.get("stake"),
+                "reason": record.get("reason"),
+            })
+        except Exception as e:
+            results.append({
+                "condition_id": candidate["condition_id"],
+                "question": candidate["question"],
+                "status": "error",
+                "error": str(e),
+            })
     return {
         "scan_completed": True,
         "candidates_processed": len(results),
