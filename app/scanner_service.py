@@ -14,49 +14,13 @@ import json
 import logging
 
 from storage.math_utils import check_liquidity
+from storage.orderbook_utils import parse_orderbook
 from storage.supported_assets import match_asset
 from tools.polymarket import PolymarketTools
 
 logger = logging.getLogger(__name__)
 
 _polymarket = PolymarketTools()
-
-
-def _get_spread_and_depth(book_data: dict) -> tuple[float, float]:
-    """Extract best spread and depth from raw orderbook.
-
-    Sorts bids descending, asks ascending (CLOB doesn't guarantee order).
-    Returns (spread, depth_10pct).
-    """
-    raw_bids = book_data.get("bids", [])
-    raw_asks = book_data.get("asks", [])
-
-    if not raw_bids or not raw_asks:
-        return 1.0, 0.0  # worst case
-
-    bids = sorted(raw_bids, key=lambda x: float(x["price"]), reverse=True)
-    asks = sorted(raw_asks, key=lambda x: float(x["price"]))
-
-    best_bid = float(bids[0]["price"])
-    best_ask = float(asks[0]["price"])
-    spread = best_ask - best_bid if best_ask > 0 and best_bid > 0 else 1.0
-
-    # depth_10pct
-    midpoint = (best_bid + best_ask) / 2 if best_bid > 0 and best_ask > 0 else 0.0
-    depth = 0.0
-    if midpoint > 0:
-        lo = midpoint * 0.9
-        hi = midpoint * 1.1
-        for bid in bids:
-            p = float(bid["price"])
-            if p >= lo:
-                depth += float(bid["size"]) * p
-        for ask in asks:
-            p = float(ask["price"])
-            if p <= hi:
-                depth += float(ask["size"]) * p
-
-    return spread, depth
 
 
 def scan_candidates(max_candidates: int = 20) -> list[dict]:
@@ -104,8 +68,10 @@ def scan_candidates(max_candidates: int = 20) -> list[dict]:
             logger.warning("Orderbook fetch failed for %s: %s", condition_id, e)
             continue
 
-        yes_spread, yes_depth = _get_spread_and_depth(yes_book)
-        no_spread, no_depth = _get_spread_and_depth(no_book)
+        yes_parsed = parse_orderbook(yes_book)
+        no_parsed = parse_orderbook(no_book)
+        yes_spread, yes_depth = yes_parsed["spread"], yes_parsed["depth_10pct"]
+        no_spread, no_depth = no_parsed["spread"], no_parsed["depth_10pct"]
 
         # Conservative market-level metrics (before side selection)
         market_spread = max(yes_spread, no_spread)

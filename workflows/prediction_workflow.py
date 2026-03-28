@@ -218,47 +218,8 @@ def _should_trade(
 
 _polymarket = PolymarketTools()
 
-
-def _build_token_book(book_data: dict, token_id: str) -> dict:
-    """Build TokenBook dict from CLOB orderbook response.
-
-    IMPORTANT: Polymarket CLOB API does NOT guarantee sort order.
-    bids may come lowest-first, asks may come highest-first.
-    We must sort explicitly: bids descending, asks ascending.
-    """
-    raw_bids = book_data.get("bids", [])
-    raw_asks = book_data.get("asks", [])
-
-    # Sort: bids descending (highest first), asks ascending (lowest first)
-    bids = sorted(raw_bids, key=lambda x: float(x["price"]), reverse=True)
-    asks = sorted(raw_asks, key=lambda x: float(x["price"]))
-
-    best_bid = float(bids[0]["price"]) if bids else 0.0
-    best_ask = float(asks[0]["price"]) if asks else 0.0
-    spread = best_ask - best_bid if best_ask > 0 and best_bid > 0 else 0.0
-
-    # depth_10pct: sum of $ liquidity within 10% of midpoint
-    midpoint = (best_bid + best_ask) / 2 if best_bid > 0 and best_ask > 0 else 0.0
-    depth = 0.0
-    if midpoint > 0:
-        lo = midpoint * 0.9
-        hi = midpoint * 1.1
-        for bid in bids:
-            p = float(bid["price"])
-            if p >= lo:
-                depth += float(bid["size"]) * p
-        for ask in asks:
-            p = float(ask["price"])
-            if p <= hi:
-                depth += float(ask["size"]) * p
-
-    return {
-        "token_id": token_id,
-        "best_bid": best_bid,
-        "best_ask": best_ask,
-        "spread": round(spread, 4),
-        "depth_10pct": round(depth, 2),
-    }
+# Shared orderbook parsing — single source of truth
+from storage.orderbook_utils import build_token_book as _build_token_book
 
 
 def run_event_scan(step_input: StepInput) -> StepOutput:

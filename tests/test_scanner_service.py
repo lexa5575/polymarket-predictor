@@ -5,7 +5,8 @@ from unittest.mock import patch
 
 import pytest
 
-from app.scanner_service import scan_candidates, _get_spread_and_depth
+from app.scanner_service import scan_candidates
+from storage.orderbook_utils import parse_orderbook
 
 
 def _make_market(question, condition_id, token_ids, volume=30000, liquidity=50000):
@@ -30,17 +31,17 @@ def _make_orderbook(best_bid=0.48, best_ask=0.52, levels=10):
     return json.dumps({"bids": bids, "asks": asks})
 
 
-class TestGetSpreadAndDepth:
+class TestParseOrderbook:
     def test_normal_orderbook(self):
         book = json.loads(_make_orderbook(0.48, 0.52))
-        spread, depth = _get_spread_and_depth(book)
-        assert spread == pytest.approx(0.04, abs=0.01)
-        assert depth > 0
+        parsed = parse_orderbook(book)
+        assert parsed["spread"] == pytest.approx(0.04, abs=0.01)
+        assert parsed["depth_10pct"] > 0
 
     def test_empty_orderbook(self):
-        spread, depth = _get_spread_and_depth({"bids": [], "asks": []})
-        assert spread == 1.0
-        assert depth == 0.0
+        parsed = parse_orderbook({"bids": [], "asks": []})
+        assert parsed["spread"] == 1.0
+        assert parsed["depth_10pct"] == 0.0
 
     def test_unsorted_orderbook(self):
         """Regression: CLOB returns unsorted data."""
@@ -48,8 +49,8 @@ class TestGetSpreadAndDepth:
             "bids": [{"price": "0.01", "size": "100"}, {"price": "0.48", "size": "500"}],
             "asks": [{"price": "0.99", "size": "100"}, {"price": "0.52", "size": "500"}],
         }
-        spread, depth = _get_spread_and_depth(book)
-        assert spread == pytest.approx(0.04, abs=0.01)
+        parsed = parse_orderbook(book)
+        assert parsed["spread"] == pytest.approx(0.04, abs=0.01)
 
 
 class TestScanCandidates:
