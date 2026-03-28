@@ -84,13 +84,17 @@ def fetch_sentiment(query: str, num_results: int = 5) -> SentimentReport:
         f"\nRespond with ONLY the JSON object, no markdown."
     )
 
-    # 3. LLM summarizes sentiment (no tools)
+    # 3. LLM summarizes sentiment (OpenAI SDK directly — no Agno wrapper)
     try:
-        from agno.models.openai import OpenAIChat
+        from openai import OpenAI
 
-        model = OpenAIChat(id="gpt-4.1-mini")
-        response = model.invoke(messages=[{"role": "user", "content": prompt}])
-        raw_text = response.content if hasattr(response, "content") else str(response)
+        client = OpenAI()  # uses OPENAI_API_KEY from env
+        response = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+        )
+        raw_text = response.choices[0].message.content or ""
 
         json_match = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", raw_text)
         if json_match:
