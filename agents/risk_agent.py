@@ -12,7 +12,7 @@ by the compute_edge_and_gate workflow step.
 
 from agno.agent import Agent
 from agno.learn import LearnedKnowledgeConfig, LearningMachine, LearningMode
-from agno.models.openai import OpenAIChat
+from agno.models.openai import OpenAIResponses
 
 from agents.settings import team_knowledge, team_learnings
 from schemas.market import RiskEstimate
@@ -65,7 +65,7 @@ or position sizes — those are handled by deterministic code after you.
 risk_agent = Agent(
     id="risk-agent",
     name="Risk Agent",
-    model=OpenAIChat(id="gpt-4.1"),
+    model=OpenAIResponses(id="o4-mini"),
     db=agent_db,
     instructions=instructions + (
         "\n\nCRITICAL: Your response must be a single raw JSON object with ALL required fields."
