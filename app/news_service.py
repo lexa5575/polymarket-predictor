@@ -84,7 +84,7 @@ def fetch_sentiment(query: str, num_results: int = 5) -> SentimentReport:
         f"\nRespond with ONLY the JSON object, no markdown."
     )
 
-    # 3. LLM summarizes sentiment (OpenAI SDK directly — no Agno wrapper)
+    # 3. LLM summarizes sentiment (OpenAI SDK with JSON mode — no regex parsing)
     try:
         from openai import OpenAI
 
@@ -93,19 +93,20 @@ def fetch_sentiment(query: str, num_results: int = 5) -> SentimentReport:
             model="gpt-4.1-mini",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
+            response_format={"type": "json_object"},
         )
-        raw_text = response.choices[0].message.content or ""
+        raw_text = response.choices[0].message.content or "{}"
+        data = json.loads(raw_text)
 
-        json_match = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", raw_text)
-        if json_match:
-            data = json.loads(json_match.group())
-            return SentimentReport(
-                query=data.get("query", query),
-                sentiment_score=float(data.get("sentiment_score", 0.0)),
-                key_narratives=data.get("key_narratives", ["No narratives extracted"]),
-                sources_count=data.get("sources_count", sources_count),
-                confidence=float(data.get("confidence", 0.3)),
-            )
+        # LLM provides only: sentiment_score, key_narratives, confidence
+        # query and sources_count are DETERMINISTIC from code — never from LLM
+        return SentimentReport(
+            query=query,
+            sentiment_score=float(data.get("sentiment_score", 0.0)),
+            key_narratives=data.get("key_narratives", ["No narratives extracted"]),
+            sources_count=sources_count,
+            confidence=float(data.get("confidence", 0.3)),
+        )
     except Exception as e:
         logger.warning("News sentiment LLM failed: %s", e)
 
