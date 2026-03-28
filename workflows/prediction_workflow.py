@@ -27,7 +27,7 @@ from agents import (
     risk_agent,
 )
 from agents.settings import get_paper_trade_store
-from tools.polymarket import PolymarketTools
+from tools.polymarket import PolymarketTools, _normalize_token_ids, _normalize_outcome_prices
 from schemas.market import (
     BetDecision,
     EventCandidate,
@@ -241,19 +241,14 @@ def run_event_scan(step_input: StepInput) -> StepOutput:
         return StepOutput(content=None)
 
     try:
-        # Find market in active markets
-        markets = json.loads(_polymarket.get_active_crypto_markets(limit=100))
-        market = None
-        for m in markets:
-            if m.get("condition_id") == condition_id:
-                market = m
-                break
-
-        if not market:
-            logger.error("Event Scan: market %s not found", condition_id)
+        # Direct lookup by condition_id (no top-100 search)
+        market_json = _polymarket.find_market(condition_id)
+        market = json.loads(market_json)
+        if "error" in market:
+            logger.error("Event Scan: market %s not found: %s", condition_id, market["error"])
             return StepOutput(content=None)
 
-        token_ids = market.get("clob_token_ids", [])
+        token_ids = _normalize_token_ids(market.get("clobTokenIds", []))
         if len(token_ids) < 2:
             logger.error("Event Scan: market %s has < 2 token IDs", condition_id)
             return StepOutput(content=None)
@@ -268,21 +263,22 @@ def run_event_scan(step_input: StepInput) -> StepOutput:
         yes_book = _build_token_book(yes_book_raw, yes_token_id)
         no_book = _build_token_book(no_book_raw, no_token_id)
 
-        # Outcome prices
-        prices = market.get("outcome_prices", [])
+        # Outcome prices — Gamma API uses outcomePrices, scanner normalizes to outcome_prices
+        raw_prices = market.get("outcomePrices") or market.get("outcome_prices") or []
+        prices = _normalize_outcome_prices(raw_prices)
         market_prob_yes = float(prices[0]) if prices else 0.5
 
         event = EventCandidate(
-            gamma_market_id=str(market.get("gamma_market_id", "")),
+            gamma_market_id=str(market.get("id") or market.get("gamma_market_id", "")),
             condition_id=condition_id,
             market_slug=market.get("slug", ""),
             question=market.get("question", ""),
             category="crypto",
-            end_date=market.get("end_date", ""),
+            end_date=market.get("endDate") or market.get("end_date", ""),
             yes_book=yes_book,
             no_book=no_book,
             market_prob_yes=market_prob_yes,
-            volume_24h=float(market.get("volume_24h", 0)),
+            volume_24h=float(market.get("volume24hr") or market.get("volume_24h") or 0),
             total_liquidity=yes_book["depth_10pct"] + no_book["depth_10pct"],
         )
         return StepOutput(content=event)
@@ -689,11 +685,13 @@ def build_decision(step_input: StepInput) -> StepOutput:
             f"{reasoning_text}"
         )
 
-    # Exit conditions (template, not LLM)
+    # Exit conditions — reflect actual monitor exit policy
+    from storage.exit_policy import TAKE_PROFIT_PCT, STOP_LOSS_PCT, MAX_HOLD_SECONDS
     exit_conditions = [
-        "Exit if market probability moves against us by more than 15%",
-        "Exit if new information fundamentally changes the thesis",
-        "Hold until resolution if conditions remain stable",
+        f"Take profit at +{TAKE_PROFIT_PCT:.0%} of stake",
+        f"Stop loss at {STOP_LOSS_PCT:.0%} of stake",
+        f"Max hold time: {MAX_HOLD_SECONDS / 60:.0f} minutes",
+        "Market resolution (binary outcome)",
     ] if action == "BET" else []
 
     return StepOutput(content=BetDecision(

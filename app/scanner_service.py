@@ -76,7 +76,13 @@ def scan_candidates(max_candidates: int = 20) -> list[dict]:
         # Market-level metrics (before side selection)
         # Spread: worst case (max) — conservative
         # Depth: best side (max) — on extreme markets (prob <5% or >95%)
-        # one side is always near-empty, but the tradeable side has depth
+        #   one side always has near-zero depth, but the tradeable side is deep.
+        #   NOTE: this means a candidate can pass scanner but fail side-specific
+        #   depth check in compute_position_sizing. This is acceptable because:
+        #   1) Risk Agent may choose the deep side (NO) where edge exists
+        #   2) If Risk Agent picks the shallow side, sizing correctly force_skips
+        #   3) Without max(), ALL extreme markets would be filtered (100% of them)
+        #   The alternative (min) was tested and rejected: it filtered everything.
         market_spread = max(yes_spread, no_spread)
         market_depth = max(yes_depth, no_depth)
 
