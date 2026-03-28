@@ -3,16 +3,16 @@ News Agent
 ----------
 
 Sentiment analysis from X/Twitter and web sources.
-Model: xAI Grok (access to X/Twitter context).
-Tools: Exa MCP web search.
+Model: GPT-4o-mini (reliable structured output).
+Tools: Exa web search (sync SDK, not MCP).
 """
 
 from agno.agent import Agent
 from agno.learn import LearnedKnowledgeConfig, LearningMachine, LearningMode
 from agno.models.openai import OpenAIChat
-from agno.tools.mcp import MCPTools
+from agno.tools.exa import ExaTools
 
-from agents.settings import EXA_MCP_URL, team_knowledge, team_learnings
+from agents.settings import team_knowledge, team_learnings
 from context import COMMITTEE_CONTEXT
 from db import get_postgres_db
 from schemas.market import SentimentReport
@@ -71,7 +71,7 @@ news_agent = Agent(
         "\n\nRespond with a JSON object: query, sentiment_score (-1 to 1), key_narratives (array),"
         "\nsources_count, confidence (0 to 1)."
     ),
-    tools=[MCPTools(url=EXA_MCP_URL)],
+    tools=[ExaTools(text=True, num_results=5)],
     output_schema=SentimentReport,
     knowledge=team_knowledge,
     search_knowledge=True,
