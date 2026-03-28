@@ -153,6 +153,57 @@ def _make_step_input(**step_outputs) -> StepInput:
 
 
 # ---------------------------------------------------------------------------
+# _build_token_book tests (orderbook sort order)
+# ---------------------------------------------------------------------------
+
+
+class TestBuildTokenBook:
+    """Regression: Polymarket CLOB returns bids/asks in unsorted order."""
+
+    def test_unsorted_bids_asks(self):
+        """bids lowest-first, asks highest-first → must still get correct spread."""
+        from workflows.prediction_workflow import _build_token_book
+
+        book = {
+            "bids": [
+                {"price": "0.01", "size": "100"},
+                {"price": "0.10", "size": "200"},
+                {"price": "0.42", "size": "500"},
+            ],
+            "asks": [
+                {"price": "0.99", "size": "100"},
+                {"price": "0.50", "size": "200"},
+                {"price": "0.43", "size": "500"},
+            ],
+        }
+        result = _build_token_book(book, "test-token")
+        assert result["best_bid"] == 0.42
+        assert result["best_ask"] == 0.43
+        assert result["spread"] == pytest.approx(0.01, abs=0.001)
+        assert result["token_id"] == "test-token"
+
+    def test_already_sorted(self):
+        """Already sorted orderbook should also work."""
+        from workflows.prediction_workflow import _build_token_book
+
+        book = {
+            "bids": [{"price": "0.50", "size": "100"}, {"price": "0.49", "size": "100"}],
+            "asks": [{"price": "0.51", "size": "100"}, {"price": "0.52", "size": "100"}],
+        }
+        result = _build_token_book(book, "tok")
+        assert result["best_bid"] == 0.50
+        assert result["best_ask"] == 0.51
+        assert result["spread"] == pytest.approx(0.01)
+
+    def test_empty_orderbook(self):
+        from workflows.prediction_workflow import _build_token_book
+
+        result = _build_token_book({"bids": [], "asks": []}, "tok")
+        assert result["best_bid"] == 0.0
+        assert result["best_ask"] == 0.0
+
+
+# ---------------------------------------------------------------------------
 # Helper tests
 # ---------------------------------------------------------------------------
 
