@@ -25,7 +25,6 @@ from agno.workflow.types import StepInput, StepOutput
 from agents import (
     logger_agent,
     market_data_agent,
-    news_agent,
     risk_agent,
 )
 from agents.settings import get_paper_trade_store
@@ -321,6 +320,122 @@ def run_event_scan(step_input: StepInput) -> StepOutput:
     except Exception as e:
         logger.error("Event Scan failed: %s", e)
         return StepOutput(content=None)
+
+
+# ---------------------------------------------------------------------------
+# Step: News & Sentiment (code fetches, LLM only reasons)
+# ---------------------------------------------------------------------------
+
+
+def _safe_sentiment() -> SentimentReport:
+    """Fallback SentimentReport when search or LLM fails."""
+    return SentimentReport(
+        query="fallback",
+        sentiment_score=0.0,
+        key_narratives=["No sentiment data available"],
+        sources_count=0,
+        confidence=0.1,
+    )
+
+
+def run_news_sentiment(step_input: StepInput) -> StepOutput:
+    """Fetch news via Exa SDK (deterministic), then LLM summarizes sentiment.
+
+    Code handles: search query, API call, text extraction.
+    LLM handles: sentiment scoring from provided text.
+    """
+    import os
+
+    from agno.models.openai import OpenAIChat
+
+    # 1. Build search query from Event Scan data
+    event = _step_content_to_model(step_input.get_step_output("Event Scan"), EventCandidate)
+    if not event:
+        return StepOutput(content=_safe_sentiment())
+
+    query = f"{event.question} crypto prediction market"
+
+    # 2. Fetch news articles via Exa SDK (deterministic — no LLM)
+    articles = []
+    try:
+        from exa_py import Exa
+
+        api_key = os.getenv("EXA_API_KEY", "")
+        if not api_key:
+            logger.warning("EXA_API_KEY not set, skipping news search")
+        else:
+            exa = Exa(api_key)
+            result = exa.search_and_contents(
+                query,
+                num_results=5,
+                text={"max_characters": 500},
+                type="auto",
+            )
+            for r in result.results:
+                articles.append({
+                    "title": r.title or "",
+                    "url": r.url or "",
+                    "published": getattr(r, "published_date", None),
+                    "text": (r.text or "")[:500],
+                })
+    except Exception as e:
+        logger.warning("Exa search failed: %s", e)
+
+    sources_count = len(articles)
+
+    # 3. Build context for LLM — only text, no tool calls
+    if articles:
+        articles_text = "\n\n".join(
+            f"[{i+1}] {a['title']}\n{a['text']}"
+            for i, a in enumerate(articles)
+        )
+    else:
+        articles_text = "No news articles found. Use general crypto market knowledge."
+
+    prompt = (
+        f"Analyze sentiment for this prediction market:\n"
+        f"Question: {event.question}\n\n"
+        f"Recent news ({sources_count} sources):\n{articles_text}\n\n"
+        f"Return a JSON object with exactly these fields:\n"
+        f'- "query": the search query used ("{query}")\n'
+        f'- "sentiment_score": float from -1.0 (very bearish) to +1.0 (very bullish)\n'
+        f'- "key_narratives": array of 1-5 short strings (dominant narratives)\n'
+        f'- "sources_count": {sources_count}\n'
+        f'- "confidence": float 0.0-1.0 (how confident in the sentiment assessment)\n'
+        f"\nRespond with ONLY the JSON object, no markdown."
+    )
+
+    # 4. Call LLM for sentiment analysis only (no tools)
+    try:
+        model = OpenAIChat(id="gpt-4.1-mini")
+        response = model.invoke(messages=[{"role": "user", "content": prompt}])
+        raw_text = response.content if hasattr(response, "content") else str(response)
+
+        # Parse response
+        import re
+        # Find JSON in response
+        json_match = re.search(r"\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", raw_text)
+        if json_match:
+            data = json.loads(json_match.group())
+            report = SentimentReport(
+                query=data.get("query", query),
+                sentiment_score=float(data.get("sentiment_score", 0.0)),
+                key_narratives=data.get("key_narratives", ["No narratives extracted"]),
+                sources_count=data.get("sources_count", sources_count),
+                confidence=float(data.get("confidence", 0.3)),
+            )
+            return StepOutput(content=report)
+    except Exception as e:
+        logger.warning("News sentiment LLM failed: %s", e)
+
+    # 5. Fallback — but with real sources_count
+    return StepOutput(content=SentimentReport(
+        query=query,
+        sentiment_score=0.0,
+        key_narratives=[f"Search returned {sources_count} articles but LLM parsing failed"],
+        sources_count=sources_count,
+        confidence=0.1,
+    ))
 
 
 # ---------------------------------------------------------------------------
@@ -764,7 +879,7 @@ prediction_workflow = Workflow(
         Step(name="Event Scan", executor=run_event_scan),
         Parallel(
             Step(name="Market Data", agent=market_data_agent),  # type: ignore[arg-type]
-            Step(name="News & Sentiment", agent=news_agent),  # type: ignore[arg-type]
+            Step(name="News & Sentiment", executor=run_news_sentiment),
             name="Data Collection",
         ),
         Step(name="Data Quality", executor=ensure_data_quality),
