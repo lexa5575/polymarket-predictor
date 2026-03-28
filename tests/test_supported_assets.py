@@ -41,6 +41,34 @@ class TestMatchAsset:
         assert match_asset("bitcoin price")["coin_id"] == "bitcoin"
         assert match_asset("Bitcoin Price")["coin_id"] == "bitcoin"
 
+    def test_match_doge(self):
+        assert match_asset("Will DOGE reach $1?")["coin_id"] == "dogecoin"
+        assert match_asset("Dogecoin price prediction")["coin_id"] == "dogecoin"
+
+    def test_match_xrp(self):
+        assert match_asset("Will XRP reach $5?")["coin_id"] == "ripple"
+
+    def test_match_link(self):
+        assert match_asset("LINK price above $50?")["coin_id"] == "chainlink"
+
+    def test_match_ada(self):
+        assert match_asset("Cardano reach $2?")["coin_id"] == "cardano"
+
+    def test_match_avax(self):
+        assert match_asset("AVAX price prediction")["coin_id"] == "avalanche-2"
+
+    def test_match_bnb(self):
+        assert match_asset("BNB above $600?")["coin_id"] == "binancecoin"
+
+    def test_match_ton(self):
+        assert match_asset("TON price reach $10?")["coin_id"] == "the-open-network"
+
+    def test_match_dot(self):
+        assert match_asset("Polkadot reach $20?")["coin_id"] == "polkadot"
+
+    def test_match_ltc(self):
+        assert match_asset("Litecoin above $100?")["coin_id"] == "litecoin"
+
     def test_returns_coin_id_and_symbol(self):
         result = match_asset("BTC to $200K")
         assert result["coin_id"] == "bitcoin"
