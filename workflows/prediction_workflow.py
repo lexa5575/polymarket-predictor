@@ -228,21 +228,25 @@ def run_event_scan(step_input: StepInput) -> StepOutput:
     No LLM involved — all data comes directly from API.
     Reads condition_id from workflow input.
     """
-    # Get condition_id from workflow input (step_input.input = PredictionRequest)
+    # Get identifiers from workflow input (step_input.input = PredictionRequest)
     wf_input = step_input.input
     condition_id = None
+    gamma_market_id = None
     if hasattr(wf_input, "condition_id"):
         condition_id = wf_input.condition_id
+        gamma_market_id = getattr(wf_input, "gamma_market_id", None)
     elif isinstance(wf_input, dict):
         condition_id = wf_input.get("condition_id")
+        gamma_market_id = wf_input.get("gamma_market_id")
 
-    if not condition_id:
-        logger.error("Event Scan: no condition_id in workflow input")
+    if not condition_id and not gamma_market_id:
+        logger.error("Event Scan: no condition_id or gamma_market_id in workflow input")
         return StepOutput(content=None)
 
     try:
-        # Direct lookup by condition_id (no top-100 search)
-        market_json = _polymarket.find_market(condition_id)
+        # Direct lookup: prefer gamma_market_id (reliable), fallback to condition_id
+        lookup_id = gamma_market_id or condition_id
+        market_json = _polymarket.find_market(lookup_id)
         market = json.loads(market_json)
         if "error" in market:
             logger.error("Event Scan: market %s not found: %s", condition_id, market["error"])

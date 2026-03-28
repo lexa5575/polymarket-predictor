@@ -70,6 +70,7 @@ async def scan_and_fanout(max_candidates: int = 20):
                 input=PredictionRequest(
                     mode="single_market",
                     condition_id=candidate["condition_id"],
+                    gamma_market_id=candidate.get("gamma_market_id"),
                 )
             )
             record = _extract_record(wf_result)

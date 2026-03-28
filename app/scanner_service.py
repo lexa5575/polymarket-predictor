@@ -97,6 +97,7 @@ def scan_candidates(max_candidates: int = 20) -> list[dict]:
 
         candidates.append({
             "condition_id": condition_id,
+            "gamma_market_id": str(m.get("gamma_market_id", "")),
             "question": question,
             "score": score,
             "volume_24h": volume_24h,
