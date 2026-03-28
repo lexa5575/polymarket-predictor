@@ -73,9 +73,12 @@ def scan_candidates(max_candidates: int = 20) -> list[dict]:
         yes_spread, yes_depth = yes_parsed["spread"], yes_parsed["depth_10pct"]
         no_spread, no_depth = no_parsed["spread"], no_parsed["depth_10pct"]
 
-        # Conservative market-level metrics (before side selection)
+        # Market-level metrics (before side selection)
+        # Spread: worst case (max) — conservative
+        # Depth: best side (max) — on extreme markets (prob <5% or >95%)
+        # one side is always near-empty, but the tradeable side has depth
         market_spread = max(yes_spread, no_spread)
-        market_depth = min(yes_depth, no_depth)
+        market_depth = max(yes_depth, no_depth)
 
         # 4. Shared liquidity check (same thresholds as Edge & Gate)
         liquidity_ok, warnings = check_liquidity(market_depth, volume_24h, market_spread)
