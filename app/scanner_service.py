@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # Strategy-fit horizon: short-term markets where price moves fast
 MIN_DAYS_TO_RESOLUTION = 1    # skip already-expired markets
-MAX_DAYS_TO_RESOLUTION = 7    # focus on near-term resolution for active trading
+MAX_DAYS_TO_RESOLUTION = 14   # near-term markets with active price movement
 
 _polymarket = PolymarketTools()
 
