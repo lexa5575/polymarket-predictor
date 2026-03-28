@@ -16,11 +16,17 @@ from typing import Literal
 
 from schemas.market import MarketSnapshot
 
+import time
+
 from tools.coingecko import CoinGeckoTools
 from tools.coinglass import CoinglassTools
 from tools.fear_greed import FearGreedTools
 
 logger = logging.getLogger(__name__)
+
+# Simple TTL cache: {coin_id: (snapshot, timestamp)}
+_cache: dict[str, tuple] = {}
+_CACHE_TTL = 60  # seconds — same BTC data reused across candidates in one scan
 
 
 def _get_coingecko():
@@ -76,7 +82,16 @@ def fetch_market_snapshot(coin_id: str, symbol: str) -> MarketSnapshot | None:
     - Fear & Greed: index, label (REQUIRED)
 
     Returns MarketSnapshot or None on critical failure.
+    Uses 60s TTL cache to avoid CoinGecko rate limits when scanning
+    multiple markets for the same asset (e.g. 15 BTC markets in one scan).
     """
+    # Check cache
+    cache_key = f"{coin_id}:{symbol}"
+    if cache_key in _cache:
+        cached_snapshot, cached_time = _cache[cache_key]
+        if time.time() - cached_time < _CACHE_TTL:
+            return cached_snapshot
+
     cg = _get_coingecko()
     bn = _get_coinglass()
     fg = _get_fear_greed()
@@ -126,7 +141,7 @@ def fetch_market_snapshot(coin_id: str, symbol: str) -> MarketSnapshot | None:
     # 4. Derive signal
     signal = derive_signal(change_24h_pct, fear_greed_index, funding_rate)
 
-    return MarketSnapshot(
+    snapshot = MarketSnapshot(
         coin_id=coin_id,
         price_usd=price_usd,
         change_24h_pct=change_24h_pct,
@@ -137,3 +152,5 @@ def fetch_market_snapshot(coin_id: str, symbol: str) -> MarketSnapshot | None:
         fear_greed_label=fear_greed_label,
         signal=signal,
     )
+    _cache[cache_key] = (snapshot, time.time())
+    return snapshot
