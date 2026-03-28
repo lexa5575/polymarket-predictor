@@ -165,6 +165,89 @@ class TestCheckPortfolioLimits:
         assert ok is True
 
 
+class TestCalculateMtmPnl:
+    def test_profit(self):
+        # Buy YES at 0.50, current 0.60, stake $100 → shares=200, value=120, PnL=+20
+        from storage.math_utils import calculate_mtm_pnl
+        assert calculate_mtm_pnl(0.50, 0.60, 100.0) == pytest.approx(20.0)
+
+    def test_loss(self):
+        from storage.math_utils import calculate_mtm_pnl
+        assert calculate_mtm_pnl(0.50, 0.40, 100.0) == pytest.approx(-20.0)
+
+    def test_breakeven(self):
+        from storage.math_utils import calculate_mtm_pnl
+        assert calculate_mtm_pnl(0.50, 0.50, 100.0) == pytest.approx(0.0)
+
+    def test_zero_entry(self):
+        from storage.math_utils import calculate_mtm_pnl
+        assert calculate_mtm_pnl(0.0, 0.50, 100.0) == 0.0
+
+
+class TestGetExitPrice:
+    def test_with_bids(self):
+        from storage.math_utils import get_exit_price_from_orderbook
+        book = {"bids": [{"price": "0.55", "size": "100"}]}
+        assert get_exit_price_from_orderbook(book) == 0.55
+
+    def test_empty_bids(self):
+        from storage.math_utils import get_exit_price_from_orderbook
+        assert get_exit_price_from_orderbook({"bids": []}) is None
+
+    def test_no_bids_key(self):
+        from storage.math_utils import get_exit_price_from_orderbook
+        assert get_exit_price_from_orderbook({}) is None
+
+
+class TestCheckExitConditions:
+    def test_resolution_highest_priority(self):
+        from storage.math_utils import check_exit_conditions
+        # Even with take profit, resolution wins
+        should, reason = check_exit_conditions(
+            unrealized_pnl=50, stake=100, age_seconds=10,
+            market_resolved=True, take_profit_pct=0.10, stop_loss_pct=-0.05, max_hold_seconds=1800,
+        )
+        assert should is True
+        assert reason == "resolution"
+
+    def test_stop_loss_before_take_profit(self):
+        from storage.math_utils import check_exit_conditions
+        # Negative PnL that hits both (theoretically impossible but tests priority)
+        should, reason = check_exit_conditions(
+            unrealized_pnl=-10, stake=100, age_seconds=10,
+            market_resolved=False, take_profit_pct=0.10, stop_loss_pct=-0.05, max_hold_seconds=1800,
+        )
+        assert should is True
+        assert reason == "stop_loss"
+
+    def test_take_profit(self):
+        from storage.math_utils import check_exit_conditions
+        should, reason = check_exit_conditions(
+            unrealized_pnl=15, stake=100, age_seconds=10,
+            market_resolved=False, take_profit_pct=0.10, stop_loss_pct=-0.05, max_hold_seconds=1800,
+        )
+        assert should is True
+        assert reason == "take_profit"
+
+    def test_max_hold(self):
+        from storage.math_utils import check_exit_conditions
+        should, reason = check_exit_conditions(
+            unrealized_pnl=2, stake=100, age_seconds=2000,
+            market_resolved=False, take_profit_pct=0.10, stop_loss_pct=-0.05, max_hold_seconds=1800,
+        )
+        assert should is True
+        assert reason == "max_hold"
+
+    def test_no_exit(self):
+        from storage.math_utils import check_exit_conditions
+        should, reason = check_exit_conditions(
+            unrealized_pnl=5, stake=100, age_seconds=600,
+            market_resolved=False, take_profit_pct=0.10, stop_loss_pct=-0.05, max_hold_seconds=1800,
+        )
+        assert should is False
+        assert reason is None
+
+
 class TestKellyCriterion:
     def test_positive_edge(self):
         # p=0.6, market=0.5 → Kelly should be positive

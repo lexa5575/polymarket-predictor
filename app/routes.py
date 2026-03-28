@@ -158,25 +158,159 @@ async def settle_trades():
 
 @router.get("/dashboard")
 async def dashboard():
-    """Current bankroll snapshot + open positions summary."""
+    """Current bankroll snapshot + open positions with unrealized PnL."""
+    import json as _json
+    from datetime import datetime as _dt
+    from datetime import timezone as _tz
+
+    from storage.math_utils import calculate_mtm_pnl, get_exit_price_from_orderbook
+
     store = get_paper_trade_store()
     snapshot = store.get_bankroll_snapshot()
     open_trades = store.get_open_trades()
+    now = _dt.now(_tz.utc)
+
+    positions = []
+    for t in open_trades:
+        pos = {
+            "id": t.id,
+            "question": t.question,
+            "side": t.side,
+            "stake": t.stake,
+            "edge": t.edge,
+            "underlier_group": t.underlier_group,
+            "created_at": t.created_at.isoformat(),
+            "age_minutes": round(
+                (now - (t.created_at.replace(tzinfo=_tz.utc) if t.created_at.tzinfo is None else t.created_at)).total_seconds() / 60, 1,
+            ),
+            "exit_policy": {
+                "take_profit_pct": t.take_profit_pct,
+                "stop_loss_pct": t.stop_loss_pct,
+                "max_hold_seconds": t.max_hold_seconds,
+            },
+        }
+        # Try to get current price for unrealized PnL
+        try:
+            book = _json.loads(_polymarket_tools.get_orderbook(t.token_id))
+            price = get_exit_price_from_orderbook(book)
+            if price is not None:
+                pnl = calculate_mtm_pnl(t.entry_fill_price, price, t.stake)
+                pos["current_price"] = price
+                pos["unrealized_pnl"] = round(pnl, 2)
+                pos["unrealized_pnl_pct"] = round(pnl / t.stake, 4) if t.stake else 0.0
+        except Exception:
+            pass  # graceful degradation
+        positions.append(pos)
 
     return {
         "bankroll": snapshot.model_dump(),
-        "open_positions": [
-            {
-                "id": t.id,
-                "question": t.question,
-                "side": t.side,
-                "stake": t.stake,
-                "edge": t.edge,
-                "underlier_group": t.underlier_group,
-                "created_at": t.created_at.isoformat(),
-            }
-            for t in open_trades
-        ],
+        "open_positions": positions,
+    }
+
+
+@router.post("/monitor")
+async def monitor_positions():
+    """Check all open trades, close by exit conditions (TP/SL/max_hold/resolution)."""
+    from app.monitor import run_monitor
+    return run_monitor()
+
+
+@router.get("/analytics")
+async def analytics():
+    """Detailed trading performance analytics."""
+    import statistics as _stats
+
+    store = get_paper_trade_store()
+    all_trades = store.get_all_trades()
+
+    finished = [t for t in all_trades if t.status in ("won", "lost", "closed")]
+    resolved = [t for t in all_trades if t.status in ("won", "lost")]
+    closed_early = [t for t in all_trades if t.status == "closed"]
+    won = [t for t in resolved if t.status == "won"]
+    lost = [t for t in resolved if t.status == "lost"]
+
+    total_pnl = sum(t.pnl or 0.0 for t in finished)
+    profitable = [t for t in finished if (t.pnl or 0) > 0]
+    unprofitable = [t for t in finished if (t.pnl or 0) < 0]
+
+    profits = [t.pnl for t in profitable if t.pnl is not None]
+    losses = [t.pnl for t in unprofitable if t.pnl is not None]
+    avg_profit = _stats.mean(profits) if profits else 0.0
+    avg_loss = _stats.mean(losses) if losses else 0.0
+    profit_factor = abs(sum(profits) / sum(losses)) if losses and sum(losses) != 0 else 0.0
+
+    # Two win rates
+    n_finished = len(finished)
+    n_resolved = len(resolved)
+    trading_win_rate = len(profitable) / n_finished if n_finished > 0 else 0.0
+    resolution_win_rate = len(won) / n_resolved if n_resolved > 0 else 0.0
+
+    # Sharpe
+    pnl_list = [t.pnl for t in finished if t.pnl is not None]
+    sharpe = None
+    if len(pnl_list) >= 2:
+        std = _stats.stdev(pnl_list)
+        if std > 0:
+            sharpe = _stats.mean(pnl_list) / std
+
+    # Avg hold time
+    hold_times = []
+    for t in finished:
+        end = t.exit_time or t.resolution_time
+        if end and t.created_at:
+            hold_times.append((end - t.created_at).total_seconds() / 60)
+    avg_hold = _stats.mean(hold_times) if hold_times else 0.0
+
+    # By exit reason (closed trades only)
+    by_exit_reason = {}
+    for t in closed_early:
+        reason = t.exit_reason or "unknown"
+        bucket = by_exit_reason.setdefault(reason, {"count": 0, "total_pnl": 0.0})
+        bucket["count"] += 1
+        bucket["total_pnl"] += t.pnl or 0.0
+    for bucket in by_exit_reason.values():
+        bucket["avg_pnl"] = round(bucket["total_pnl"] / bucket["count"], 2) if bucket["count"] else 0.0
+
+    # By resolution
+    by_resolution = {
+        "won": {"count": len(won), "avg_pnl": round(_stats.mean([t.pnl for t in won if t.pnl]) if won else 0.0, 2)},
+        "lost": {"count": len(lost), "avg_pnl": round(_stats.mean([t.pnl for t in lost if t.pnl]) if lost else 0.0, 2)},
+    }
+
+    # By underlier group
+    by_group = {}
+    for t in finished:
+        g = t.underlier_group
+        bucket = by_group.setdefault(g, {"count": 0, "total_pnl": 0.0})
+        bucket["count"] += 1
+        bucket["total_pnl"] += t.pnl or 0.0
+    for bucket in by_group.values():
+        bucket["total_pnl"] = round(bucket["total_pnl"], 2)
+
+    # Edge vs result
+    edges = [t.edge for t in finished if t.edge is not None]
+    returns = [(t.pnl or 0) / t.stake if t.stake else 0.0 for t in finished]
+    avg_edge = _stats.mean(edges) if edges else 0.0
+    avg_return = _stats.mean(returns) if returns else 0.0
+
+    return {
+        "total_trades": len(all_trades),
+        "finished_trades": n_finished,
+        "trading_win_rate": round(trading_win_rate, 4),
+        "resolution_win_rate": round(resolution_win_rate, 4),
+        "avg_profit": round(avg_profit, 2),
+        "avg_loss": round(avg_loss, 2),
+        "profit_factor": round(profit_factor, 2),
+        "total_pnl": round(total_pnl, 2),
+        "sharpe_ratio": round(sharpe, 4) if sharpe else None,
+        "avg_hold_minutes": round(avg_hold, 1),
+        "by_exit_reason": by_exit_reason,
+        "by_resolution": by_resolution,
+        "by_underlier_group": by_group,
+        "edge_vs_result": {
+            "avg_predicted_edge": round(avg_edge, 4),
+            "avg_realized_return": round(avg_return, 4),
+        },
     }
 
 

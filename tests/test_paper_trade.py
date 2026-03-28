@@ -106,3 +106,66 @@ class TestPaperTradeFlow:
         cancelled = store.cancel_trade(trade.id)
         assert cancelled.status == "cancelled"
         assert cancelled.pnl == 0.0
+
+    def test_close_trade(self, store, sample_decision):
+        """Early exit via close_trade() → status=closed, mark-to-market PnL."""
+        trade = store.open_trade(sample_decision, "Q1")
+        # Entry at 0.48, exit at 0.55 → profit
+        closed = store.close_trade(trade.id, exit_price=0.55, reason="take_profit")
+        assert closed.status == "closed"
+        assert closed.exit_price == 0.55
+        assert closed.exit_reason == "take_profit"
+        assert closed.exit_time is not None
+        assert closed.pnl > 0  # bought cheap, sold higher
+        assert closed.brier_score is None  # no resolution yet
+
+    def test_close_trade_stop_loss(self, store, sample_decision):
+        """Early exit at a loss."""
+        trade = store.open_trade(sample_decision, "Q1")
+        closed = store.close_trade(trade.id, exit_price=0.35, reason="stop_loss")
+        assert closed.status == "closed"
+        assert closed.exit_reason == "stop_loss"
+        assert closed.pnl < 0
+
+    def test_record_resolution_on_closed(self, store, sample_decision):
+        """Record market outcome on an already-closed trade for what-if analytics."""
+        trade = store.open_trade(sample_decision, "Q1")
+        closed = store.close_trade(trade.id, exit_price=0.55, reason="take_profit")
+        original_pnl = closed.pnl
+
+        updated = store.record_resolution(trade.id, "YES")
+        assert updated.status == "closed"  # status unchanged
+        assert updated.pnl == original_pnl  # PnL unchanged
+        assert updated.resolved_outcome == "YES"
+        assert updated.resolution_time is not None
+        assert updated.brier_score is not None
+
+    def test_compute_snapshot_includes_closed(self, store, sample_decision):
+        """Closed trades should be included in total_pnl but not in resolution win_rate."""
+        trade = store.open_trade(sample_decision, "Q1")
+        store.close_trade(trade.id, exit_price=0.55, reason="take_profit")
+
+        snapshot = store.get_bankroll_snapshot()
+        assert snapshot.total_pnl != 0.0  # closed trade PnL counted
+        assert snapshot.wins == 0  # not a resolution win
+        assert snapshot.losses == 0  # not a resolution loss
+        assert snapshot.win_rate == 0.0  # resolution-only win_rate
+
+    def test_open_trade_saves_exit_policy(self, store, sample_decision):
+        """Exit policy should be snapshot at entry."""
+        trade = store.open_trade(sample_decision, "Q1")
+        assert trade.take_profit_pct is not None
+        assert trade.stop_loss_pct is not None
+        assert trade.max_hold_seconds is not None
+
+    def test_get_closed_without_resolution(self, store, sample_decision):
+        trade = store.open_trade(sample_decision, "Q1")
+        store.close_trade(trade.id, exit_price=0.55, reason="take_profit")
+
+        unresolved = store.get_closed_without_resolution()
+        assert len(unresolved) == 1
+        assert unresolved[0].id == trade.id
+
+        # After recording resolution, should be empty
+        store.record_resolution(trade.id, "YES")
+        assert len(store.get_closed_without_resolution()) == 0

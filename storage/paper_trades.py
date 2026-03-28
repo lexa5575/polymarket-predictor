@@ -16,7 +16,8 @@ from sqlalchemy.orm import Session
 
 from schemas.market import BetDecision
 from schemas.paper_trade import BankrollSnapshot, PaperTrade
-from storage.math_utils import brier_score, calculate_pnl
+from storage.exit_policy import MAX_HOLD_SECONDS, STOP_LOSS_PCT, TAKE_PROFIT_PCT
+from storage.math_utils import brier_score, calculate_mtm_pnl, calculate_pnl
 from storage.tables import BankrollSnapshotRow, PaperTradeRow, init_db
 
 STARTING_BANKROLL = 10_000.0
@@ -53,6 +54,9 @@ class PaperTradeStore:
             entry_fill_price=decision.entry_price,
             status="open",
             exit_conditions=decision.exit_conditions,
+            take_profit_pct=TAKE_PROFIT_PCT,
+            stop_loss_pct=STOP_LOSS_PCT,
+            max_hold_seconds=MAX_HOLD_SECONDS,
         )
 
         with self._session_factory() as session:
@@ -99,6 +103,59 @@ class PaperTradeStore:
             session.refresh(row)
             return self._row_to_model(row)
 
+    def close_trade(
+        self,
+        trade_id: str,
+        exit_price: float,
+        reason: str,
+    ) -> PaperTrade:
+        """Close an open trade at mark-to-market price (early exit).
+
+        PnL = shares * exit_price - stake, where shares = stake / entry_price.
+        Does NOT set brier_score (no binary outcome yet — use record_resolution later).
+        """
+        with self._session_factory() as session:
+            row: PaperTradeRow | None = session.get(PaperTradeRow, trade_id)
+            if row is None:
+                raise ValueError(f"Trade {trade_id} not found")
+            if row.status != "open":
+                raise ValueError(f"Trade {trade_id} is already {row.status}")
+
+            row.status = "closed"
+            row.exit_price = exit_price
+            row.exit_reason = reason
+            row.exit_time = datetime.now(timezone.utc)
+            row.pnl = calculate_mtm_pnl(row.entry_fill_price, exit_price, row.stake)
+            # brier_score stays None until market resolves (record_resolution)
+            session.commit()
+            session.refresh(row)
+            return self._row_to_model(row)
+
+    def record_resolution(
+        self,
+        trade_id: str,
+        outcome: Literal["YES", "NO"],
+    ) -> PaperTrade:
+        """Record market outcome on an already-closed trade (for what-if analytics).
+
+        Sets resolved_outcome, resolution_time, brier_score.
+        Does NOT change status, pnl, exit_price, or exit_reason.
+        """
+        with self._session_factory() as session:
+            row: PaperTradeRow | None = session.get(PaperTradeRow, trade_id)
+            if row is None:
+                raise ValueError(f"Trade {trade_id} not found")
+            if row.status != "closed":
+                raise ValueError(f"Trade {trade_id} has status {row.status}, expected 'closed'")
+
+            won = outcome == row.side
+            row.resolved_outcome = outcome
+            row.resolution_time = datetime.now(timezone.utc)
+            row.brier_score = brier_score(row.estimated_prob, 1 if won else 0)
+            session.commit()
+            session.refresh(row)
+            return self._row_to_model(row)
+
     # ------------------------------------------------------------------
     # Read operations
     # ------------------------------------------------------------------
@@ -132,6 +189,19 @@ class PaperTradeStore:
                 )
                 .count()
             )
+
+    def get_closed_without_resolution(self) -> list[PaperTrade]:
+        """Get closed trades that don't yet have a market resolution recorded."""
+        with self._session_factory() as session:
+            rows = (
+                session.query(PaperTradeRow)
+                .filter(
+                    PaperTradeRow.status == "closed",
+                    PaperTradeRow.resolved_outcome.is_(None),
+                )
+                .all()
+            )
+            return [self._row_to_model(r) for r in rows]
 
     def get_all_trades(self) -> list[PaperTrade]:
         with self._session_factory() as session:
@@ -177,17 +247,22 @@ class PaperTradeStore:
             all_rows: list[PaperTradeRow] = session.query(PaperTradeRow).all()
 
         open_rows = [r for r in all_rows if r.status == "open"]
+        # finished = all trades with realized PnL (binary resolution + early close)
+        finished = [r for r in all_rows if r.status in ("won", "lost", "closed")]
+        # resolution-only for backwards-compatible win_rate
         resolved = [r for r in all_rows if r.status in ("won", "lost")]
         wins = [r for r in resolved if r.status == "won"]
         losses = [r for r in resolved if r.status == "lost"]
 
-        total_pnl = sum(r.pnl or 0.0 for r in resolved)
+        total_pnl = sum(r.pnl or 0.0 for r in finished)
         total_at_risk = sum(r.stake for r in open_rows)
 
-        brier_scores = [r.brier_score for r in resolved if r.brier_score is not None]
+        # brier_score from all trades that have it (won/lost + closed with recorded resolution)
+        brier_scores = [r.brier_score for r in all_rows if r.brier_score is not None]
         avg_brier = statistics.mean(brier_scores) if brier_scores else 0.0
 
-        pnl_list = [r.pnl for r in resolved if r.pnl is not None]
+        # sharpe from all finished trades
+        pnl_list = [r.pnl for r in finished if r.pnl is not None]
         sharpe = None
         if len(pnl_list) >= 2:
             mean_pnl = statistics.mean(pnl_list)
@@ -234,4 +309,10 @@ class PaperTradeStore:
             pnl=row.pnl,
             brier_score=row.brier_score,
             exit_conditions=row.exit_conditions or [],
+            exit_price=row.exit_price,
+            exit_reason=row.exit_reason,
+            exit_time=row.exit_time,
+            take_profit_pct=row.take_profit_pct,
+            stop_loss_pct=row.stop_loss_pct,
+            max_hold_seconds=row.max_hold_seconds,
         )

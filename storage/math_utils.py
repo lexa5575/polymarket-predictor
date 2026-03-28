@@ -196,6 +196,61 @@ def check_portfolio_limits(
     return len(warnings) == 0, warnings
 
 
+def calculate_mtm_pnl(
+    entry_price: float,
+    current_price: float,
+    stake: float,
+) -> float:
+    """Mark-to-market PnL for an open or early-closed position.
+
+    In prediction markets you buy shares at entry_price:
+      shares = stake / entry_price
+      current_value = shares * current_price
+      unrealized_pnl = current_value - stake
+    """
+    if entry_price <= 0:
+        return 0.0
+    shares = stake / entry_price
+    return shares * current_price - stake
+
+
+def get_exit_price_from_orderbook(orderbook: dict) -> float | None:
+    """Extract best_bid from orderbook (sell price for exit).
+
+    Returns None if no bids — caller should skip and log warning (fail-closed).
+    """
+    bids = orderbook.get("bids", [])
+    if bids:
+        return float(bids[0]["price"])
+    return None
+
+
+def check_exit_conditions(
+    unrealized_pnl: float,
+    stake: float,
+    age_seconds: float,
+    market_resolved: bool,
+    take_profit_pct: float,
+    stop_loss_pct: float,
+    max_hold_seconds: float,
+) -> tuple[bool, str | None]:
+    """Check if any exit condition is met.
+
+    Priority: resolution > stop_loss > take_profit > max_hold.
+    Returns (should_exit, reason).
+    """
+    pnl_pct = unrealized_pnl / stake if stake > 0 else 0.0
+    if market_resolved:
+        return True, "resolution"
+    if pnl_pct <= stop_loss_pct:
+        return True, "stop_loss"
+    if pnl_pct >= take_profit_pct:
+        return True, "take_profit"
+    if age_seconds >= max_hold_seconds:
+        return True, "max_hold"
+    return False, None
+
+
 def calculate_pnl(entry_price: float, stake: float, won: bool) -> float:
     """Compute profit/loss for a resolved binary bet.
 

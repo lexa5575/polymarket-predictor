@@ -42,20 +42,28 @@ class PaperTrade(BaseModel):
         ...,
         description="best_ask + slippage estimate",
     )
-    status: Literal["open", "won", "lost", "cancelled", "expired"] = Field(
+    status: Literal["open", "won", "lost", "closed", "cancelled", "expired"] = Field(
         default="open",
     )
     resolution_time: datetime | None = None
     resolved_outcome: Literal["YES", "NO"] | None = None
     pnl: float | None = Field(
         None,
-        description="Profit if won: stake * (1/entry_price - 1). Loss: -stake.",
+        description="Binary: stake * (1/entry_price - 1) or -stake. MTM: shares * exit_price - stake.",
     )
     brier_score: float | None = Field(
         None,
         description="(estimated_prob - outcome_binary)^2",
     )
     exit_conditions: list[str] = Field(default_factory=list)
+    # Exit tracking (mark-to-market early close)
+    exit_price: float | None = Field(None, description="Mark-to-market exit price (best_bid)")
+    exit_reason: str | None = Field(None, description="take_profit/stop_loss/max_hold")
+    exit_time: datetime | None = Field(None, description="When position was closed")
+    # Exit policy snapshot (saved at entry for reproducibility)
+    take_profit_pct: float | None = Field(None, description="TP threshold at entry")
+    stop_loss_pct: float | None = Field(None, description="SL threshold at entry")
+    max_hold_seconds: float | None = Field(None, description="Max hold time at entry")
 
 
 class BankrollSnapshot(BaseModel):

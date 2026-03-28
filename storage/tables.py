@@ -47,6 +47,14 @@ class PaperTradeRow(Base):
     pnl = Column(Float, nullable=True)
     brier_score = Column(Float, nullable=True)
     exit_conditions = Column(JSON, nullable=False, default=list)
+    # Exit tracking (mark-to-market early close)
+    exit_price = Column(Float, nullable=True)
+    exit_reason = Column(String, nullable=True)  # take_profit/stop_loss/max_hold
+    exit_time = Column(DateTime(timezone=True), nullable=True)
+    # Exit policy snapshot (saved at entry for reproducibility)
+    take_profit_pct = Column(Float, nullable=True)
+    stop_loss_pct = Column(Float, nullable=True)
+    max_hold_seconds = Column(Float, nullable=True)
 
 
 class BankrollSnapshotRow(Base):
