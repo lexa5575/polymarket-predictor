@@ -47,6 +47,32 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  polymarket-predictor-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${IMAGE_NAME:-polymarket-predictor}:${IMAGE_TAG:-latest}
+    container_name: polymarket-predictor-monitor
+    command: python -m app.monitor_worker
+    restart: unless-stopped
+    environment:
+      RUNTIME_ENV: prd
+      PYTHONPATH: /app
+      MONITOR_INTERVAL: "${MONITOR_INTERVAL:-60}"
+      DB_HOST: polymarket-predictor-db
+      DB_PORT: "5432"
+      DB_USER: ${DB_USER:-ai}
+      DB_PASS: ${DB_PASS:-ai}
+      DB_DATABASE: ${DB_DATABASE:-ai}
+      WAIT_FOR_DB: "true"
+      PRINT_ENV_ON_LOAD: "false"
+    depends_on:
+      - polymarket-predictor-db
+    networks:
+      - polymarket-predictor
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
 networks:
   polymarket-predictor:
 

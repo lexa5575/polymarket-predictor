@@ -5,7 +5,7 @@ Position Monitor Service
 Pure function `run_monitor()` that checks all open trades and closes
 positions based on exit conditions. Called by:
 - POST /api/monitor (manual trigger)
-- Agno scheduler (cron: */1 * * * *)
+- monitor_worker.py (separate Docker service, every MONITOR_INTERVAL seconds)
 
 Two exit lifecycles:
 - Market resolution → resolve_trade() (binary PnL + brier_score)
@@ -20,7 +20,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from agents.settings import get_paper_trade_store
+from db.url import db_url
 from storage.exit_policy import MAX_HOLD_SECONDS, STOP_LOSS_PCT, TAKE_PROFIT_PCT
 from storage.math_utils import calculate_mtm_pnl, check_exit_conditions, get_exit_price_from_orderbook
 from tools.polymarket import PolymarketTools
@@ -28,6 +28,17 @@ from tools.polymarket import PolymarketTools
 logger = logging.getLogger(__name__)
 
 _polymarket_tools = PolymarketTools()
+
+# Lazy singleton — avoids importing agents.settings (which pulls OpenAI/Knowledge)
+_store = None
+
+
+def _get_store():
+    global _store
+    if _store is None:
+        from storage.paper_trades import PaperTradeStore
+        _store = PaperTradeStore(db_url)
+    return _store
 
 
 def run_monitor() -> dict:
@@ -38,7 +49,7 @@ def run_monitor() -> dict:
 
     Returns {checked, closed, trades_closed, trades_open}.
     """
-    store = get_paper_trade_store()
+    store = _get_store()
     open_trades = store.get_open_trades()
     now = datetime.now(timezone.utc)
 

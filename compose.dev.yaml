@@ -12,3 +12,10 @@ services:
       RUNTIME_ENV: dev
       AGNO_DEBUG: "true"
       PRINT_ENV_ON_LOAD: "true"
+
+  polymarket-predictor-monitor:
+    volumes:
+      - .:/app
+    environment:
+      MONITOR_INTERVAL: "30"
+      PRINT_ENV_ON_LOAD: "true"

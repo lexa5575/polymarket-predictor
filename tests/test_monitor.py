@@ -71,7 +71,7 @@ class TestMonitor:
     def _run(self, store, polymarket, monkeypatch):
         """Helper to run monitor with mocked dependencies."""
         import app.monitor as _mod
-        monkeypatch.setattr(_mod, "get_paper_trade_store", lambda: store)
+        monkeypatch.setattr(_mod, "_get_store", lambda: store)
         monkeypatch.setattr(_mod, "_polymarket_tools", polymarket)
         return _mod.run_monitor()
 
