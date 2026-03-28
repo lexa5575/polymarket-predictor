@@ -61,7 +61,7 @@ and market commentary relevant to specific prediction market events.
 news_agent = Agent(
     id="news-agent",
     name="News Agent",
-    model=OpenAIChat(id="gpt-4o-mini"),  # Grok unstable with structured outputs; using OpenAI for reliable SentimentReport
+    model=OpenAIChat(id="gpt-4.1-mini"),
     db=agent_db,
     instructions=instructions + (
         "\n\nIMPORTANT: If the web search tool fails, times out, or returns no results,"

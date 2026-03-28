@@ -58,7 +58,7 @@ Examples: `btc-100k-june-2026_2026-03-26_yes.md`
 logger_agent = Agent(
     id="logger-agent",
     name="Logger Agent",
-    model=OpenAIChat(id="gpt-4o-mini"),
+    model=OpenAIChat(id="gpt-4.1-nano"),
     db=agent_db,
     instructions=instructions,
     tools=[

@@ -55,7 +55,7 @@ read memo files. Memos are structured audit artifacts. Good for questions like:
 knowledge_agent = Agent(
     id="knowledge-agent",
     name="Knowledge Agent",
-    model=OpenAIChat(id="gpt-4o-mini"),
+    model=OpenAIChat(id="gpt-4.1-nano"),
     db=agent_db,
     instructions=instructions,
     tools=[

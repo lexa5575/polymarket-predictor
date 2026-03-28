@@ -65,7 +65,7 @@ or position sizes — those are handled by deterministic code after you.
 risk_agent = Agent(
     id="risk-agent",
     name="Risk Agent",
-    model=OpenAIChat(id="gpt-4o"),
+    model=OpenAIChat(id="gpt-4.1"),
     db=agent_db,
     instructions=instructions + (
         "\n\nCRITICAL: Your response must be a single raw JSON object with ALL required fields."

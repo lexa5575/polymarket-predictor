@@ -67,7 +67,7 @@ _learning = LearningMachine(
 polymarket_agent = Agent(
     id="polymarket-agent",
     name="Polymarket Agent",
-    model=OpenAIChat(id="gpt-4o-mini"),
+    model=OpenAIChat(id="gpt-4.1-nano"),
     db=agent_db,
     instructions=_base_instructions + "\nReturn detailed data for ONE specific market including both YES and NO orderbooks.",
     tools=_polymarket_tools,
@@ -86,7 +86,7 @@ polymarket_agent = Agent(
 polymarket_scanner = Agent(
     id="polymarket-scanner",
     name="Polymarket Scanner",
-    model=OpenAIChat(id="gpt-4o-mini"),
+    model=OpenAIChat(id="gpt-4.1-nano"),
     db=agent_db,
     instructions=_base_instructions + "\nScan for the best crypto market candidates. Rank by liquidity and edge potential.",
     tools=_polymarket_tools,
