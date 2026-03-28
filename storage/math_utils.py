@@ -215,14 +215,16 @@ def calculate_mtm_pnl(
 
 
 def get_exit_price_from_orderbook(orderbook: dict) -> float | None:
-    """Extract best_bid from orderbook (sell price for exit).
+    """Extract best_bid (highest bid) from orderbook as sell/exit price.
 
+    IMPORTANT: Polymarket CLOB API does NOT guarantee sort order.
+    We take max(bids) explicitly.
     Returns None if no bids — caller should skip and log warning (fail-closed).
     """
     bids = orderbook.get("bids", [])
-    if bids:
-        return float(bids[0]["price"])
-    return None
+    if not bids:
+        return None
+    return max(float(b["price"]) for b in bids)
 
 
 def check_exit_conditions(

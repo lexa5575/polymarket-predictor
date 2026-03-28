@@ -221,9 +221,19 @@ _polymarket = PolymarketTools()
 
 
 def _build_token_book(book_data: dict, token_id: str) -> dict:
-    """Build TokenBook dict from CLOB orderbook response."""
-    bids = book_data.get("bids", [])
-    asks = book_data.get("asks", [])
+    """Build TokenBook dict from CLOB orderbook response.
+
+    IMPORTANT: Polymarket CLOB API does NOT guarantee sort order.
+    bids may come lowest-first, asks may come highest-first.
+    We must sort explicitly: bids descending, asks ascending.
+    """
+    raw_bids = book_data.get("bids", [])
+    raw_asks = book_data.get("asks", [])
+
+    # Sort: bids descending (highest first), asks ascending (lowest first)
+    bids = sorted(raw_bids, key=lambda x: float(x["price"]), reverse=True)
+    asks = sorted(raw_asks, key=lambda x: float(x["price"]))
+
     best_bid = float(bids[0]["price"]) if bids else 0.0
     best_ask = float(asks[0]["price"]) if asks else 0.0
     spread = best_ask - best_bid if best_ask > 0 and best_bid > 0 else 0.0
