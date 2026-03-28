@@ -112,14 +112,14 @@ def check_liquidity(
     Returns (liquidity_ok, warnings).
     Rules:
     - depth_10pct >= $10K  (mandate.md:17, :26)
-    - volume_24h >= $50K   (mandate.md:17)
+    - volume_24h >= $25K   (adjusted for Polymarket prediction markets)
     - spread <= 0.05 (5%)  (mandate.md:24, risk_policy.md:25)
     """
     warnings: list[str] = []
     if depth_10pct < 10_000:
         warnings.append(f"Orderbook depth ${depth_10pct:,.0f} below $10K minimum")
-    if volume_24h < 50_000:
-        warnings.append(f"24h volume ${volume_24h:,.0f} below $50K minimum")
+    if volume_24h < 25_000:
+        warnings.append(f"24h volume ${volume_24h:,.0f} below $25K minimum")
     if spread > 0.05:
         warnings.append(f"Spread {spread:.1%} exceeds 5% limit")
     return len(warnings) == 0, warnings
