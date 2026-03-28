@@ -98,9 +98,6 @@ async def scan_and_fanout(max_candidates: int = 5):
                         "status": "error",
                         "error": str(e),
                     })
-        else:
-            results.append({"status": "no_candidates_found"})
-
     return {
         "scan_completed": True,
         "candidates_processed": len(results),

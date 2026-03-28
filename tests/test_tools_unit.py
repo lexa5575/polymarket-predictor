@@ -11,73 +11,74 @@ import pytest
 # ---------------------------------------------------------------------------
 
 
-class TestCoinglassGracefulDegradation:
-    """Coinglass tools should return null data when API key is missing."""
-
-    def test_no_api_key(self):
-        from tools.coinglass import CoinglassTools
-
-        tools = CoinglassTools(api_key="")
-        result = json.loads(tools.get_funding_rate("BTC"))
-        assert result["error"] == "COINGLASS_API_KEY not set"
-        assert result["data"] is None
-
-    def test_no_api_key_oi(self):
-        from tools.coinglass import CoinglassTools
-
-        tools = CoinglassTools(api_key="")
-        result = json.loads(tools.get_open_interest("BTC"))
-        assert result["data"] is None
+class TestBinanceFuturesTools:
+    """Tests for CoinglassTools (now backed by Binance Futures public API)."""
 
     @patch("tools.coinglass.httpx.get")
-    def test_funding_rate_success_shape(self, mock_get):
-        """Mock a successful v3 funding rate response."""
+    def test_funding_rate_success(self, mock_get):
+        """Mock a successful Binance funding rate response."""
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
-        mock_resp.json.return_value = {
-            "code": "0",
-            "data": [{"exchangeName": "Binance", "symbol": "BTC", "rate": 0.0001}],
-        }
+        mock_resp.json.return_value = [
+            {"symbol": "BTCUSDT", "fundingRate": "0.00010000", "fundingTime": 1700000000000}
+        ]
         mock_get.return_value = mock_resp
 
         from tools.coinglass import CoinglassTools
 
-        tools = CoinglassTools(api_key="test-key")
+        tools = CoinglassTools()
         result = json.loads(tools.get_funding_rate("BTC"))
         assert result["symbol"] == "BTC"
-        assert result["data"] is not None
-        assert result["data"][0]["rate"] == 0.0001
+        assert result["pair"] == "BTCUSDT"
+        assert result["funding_rate"] == pytest.approx(0.0001)
 
     @patch("tools.coinglass.httpx.get")
-    def test_api_error_response(self, mock_get):
-        """Coinglass returns success=false with msg."""
+    def test_funding_rate_empty_response(self, mock_get):
+        """Empty data array → error field."""
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
-        mock_resp.json.return_value = {"success": False, "msg": "Rate limit exceeded"}
+        mock_resp.json.return_value = []
         mock_get.return_value = mock_resp
 
         from tools.coinglass import CoinglassTools
 
-        tools = CoinglassTools(api_key="test-key")
+        tools = CoinglassTools()
         result = json.loads(tools.get_funding_rate("BTC"))
         assert result["data"] is None
-        assert "Rate limit" in result["error"]
 
     @patch("tools.coinglass.httpx.get")
-    def test_uses_cg_api_key_header(self, mock_get):
-        """Verify the v3 auth header is CG-API-KEY, not coinglassSecret."""
+    def test_open_interest_success(self, mock_get):
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
-        mock_resp.json.return_value = {"code": "0", "data": []}
+        mock_resp.json.return_value = {"openInterest": "50000.00", "symbol": "BTCUSDT", "time": 1700000000000}
         mock_get.return_value = mock_resp
 
         from tools.coinglass import CoinglassTools
 
-        tools = CoinglassTools(api_key="my-key")
-        tools.get_funding_rate("BTC")
+        tools = CoinglassTools()
+        result = json.loads(tools.get_open_interest("BTC"))
+        assert result["symbol"] == "BTC"
+        assert result["open_interest"] == 50000.0
 
-        call_kwargs = mock_get.call_args
-        assert call_kwargs.kwargs["headers"] == {"CG-API-KEY": "my-key"}
+    @patch("tools.coinglass.httpx.get")
+    def test_api_exception(self, mock_get):
+        """Network error → graceful degradation."""
+        mock_get.side_effect = Exception("Connection refused")
+
+        from tools.coinglass import CoinglassTools
+
+        tools = CoinglassTools()
+        result = json.loads(tools.get_funding_rate("BTC"))
+        assert "error" in result
+        assert result["data"] is None
+
+    def test_no_api_key_still_works(self):
+        """Binance API is free — no key needed, should not error on init."""
+        from tools.coinglass import CoinglassTools
+
+        tools = CoinglassTools(api_key="")
+        # Should not raise — api_key is ignored for Binance
+        assert tools is not None
 
 
 # ---------------------------------------------------------------------------
