@@ -282,17 +282,15 @@ class TestPricePredictionRoute:
         return TestClient(app)
 
     def test_price_prediction_basic(self, test_client, monkeypatch):
-        """Mock all three agents and verify response structure."""
+        """Mock market_data_agent, fetch_sentiment, and risk_agent."""
         import agents
+
+        from schemas.market import SentimentReport
 
         market_content = {
             "coin_id": "bitcoin", "price_usd": 67000.0, "change_24h_pct": 2.0,
             "market_cap": 1_300_000_000_000, "fear_greed_index": 65,
             "fear_greed_label": "Greed", "signal": "Bullish",
-        }
-        sentiment_content = {
-            "query": "btc 100k", "sentiment_score": 0.4,
-            "key_narratives": ["Bullish momentum"], "sources_count": 5, "confidence": 0.7,
         }
         risk_content = {
             "condition_id": "price-pred",
@@ -307,18 +305,19 @@ class TestPricePredictionRoute:
         async def _fake_market_arun(self, msg):
             return type("R", (), {"content": market_content})()
 
-        async def _fake_news_arun(self, msg):
-            return type("R", (), {"content": sentiment_content})()
-
         async def _fake_risk_arun(self, msg):
             return type("R", (), {"content": risk_content})()
 
         monkeypatch.setattr(agents, "market_data_agent",
             type("A", (), {"arun": _fake_market_arun})())
-        monkeypatch.setattr(agents, "news_agent",
-            type("A", (), {"arun": _fake_news_arun})())
         monkeypatch.setattr(agents, "risk_agent",
             type("A", (), {"arun": _fake_risk_arun})())
+
+        # Mock the shared news service (not the old news_agent)
+        monkeypatch.setattr("app.news_service.fetch_sentiment", lambda query: SentimentReport(
+            query=query, sentiment_score=0.4,
+            key_narratives=["Bullish momentum"], sources_count=5, confidence=0.7,
+        ))
 
         resp = test_client.post("/api/price-prediction", json={
             "coin": "bitcoin", "price_target": 100000, "direction": "above",
@@ -329,22 +328,20 @@ class TestPricePredictionRoute:
         assert data["estimated_probability"] == 0.72
         assert data["confidence"] == "High"
         assert "momentum" in data["rationale"].lower()
+        # Verify sentiment flowed through
+        assert data["sentiment_score"] == 0.4
 
     def test_risk_agent_reasoning_in_rationale(self, test_client, monkeypatch):
-        """Verify that RiskEstimate.reasoning flows into PricePrediction.rationale."""
+        """Verify RiskEstimate.reasoning flows into rationale, and NO-side normalization."""
         import agents
+
+        from schemas.market import SentimentReport
 
         async def _fake_market_arun(self, msg):
             return type("R", (), {"content": {
                 "coin_id": "bitcoin", "price_usd": 67000.0, "change_24h_pct": 1.0,
                 "market_cap": 1e12, "fear_greed_index": 50,
                 "fear_greed_label": "Neutral", "signal": "Neutral",
-            }})()
-
-        async def _fake_news_arun(self, msg):
-            return type("R", (), {"content": {
-                "query": "btc", "sentiment_score": 0.0,
-                "key_narratives": ["Mixed"], "sources_count": 3, "confidence": 0.5,
             }})()
 
         async def _fake_risk_arun(self, msg):
@@ -361,18 +358,20 @@ class TestPricePredictionRoute:
 
         monkeypatch.setattr(agents, "market_data_agent",
             type("A", (), {"arun": _fake_market_arun})())
-        monkeypatch.setattr(agents, "news_agent",
-            type("A", (), {"arun": _fake_news_arun})())
         monkeypatch.setattr(agents, "risk_agent",
             type("A", (), {"arun": _fake_risk_arun})())
+
+        monkeypatch.setattr("app.news_service.fetch_sentiment", lambda query: SentimentReport(
+            query=query, sentiment_score=-0.3,
+            key_narratives=["Bearish macro"], sources_count=3, confidence=0.5,
+        ))
 
         resp = test_client.post("/api/price-prediction", json={
             "coin": "bitcoin", "price_target": 100000, "direction": "above",
         })
         assert resp.status_code == 200
         data = resp.json()
-        # reasoning should flow into rationale
         assert "headwinds" in data["rationale"].lower()
-        # recommended_side=NO with P(NO)=0.65 → P(YES)=0.35 → prediction=NO
         assert data["prediction"] == "NO"
         assert data["estimated_probability"] == 0.35
+        assert data["sentiment_score"] == -0.3
