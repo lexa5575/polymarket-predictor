@@ -20,7 +20,7 @@ from storage.exit_policy import MAX_HOLD_SECONDS, STOP_LOSS_PCT, TAKE_PROFIT_PCT
 from storage.math_utils import brier_score, calculate_mtm_pnl, calculate_pnl
 from storage.tables import BankrollSnapshotRow, PaperTradeRow, init_db
 
-STARTING_BANKROLL = 10_000.0
+STARTING_BANKROLL = 1_000.0
 
 
 class PaperTradeStore:

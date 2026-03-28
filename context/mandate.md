@@ -3,7 +3,7 @@
 > All constraints below are enforced by deterministic code in the prediction workflow.
 
 ## Fund Overview
-- **Bankroll:** $10,000 (paper trading)
+- **Bankroll:** $1,000 (paper trading)
 - **Asset Class:** Polymarket prediction markets — crypto category only
 - **Benchmark:** Calibrated probability forecasting (target Brier Score < 0.25)
 - **Horizon:** Event-specific (days to months)
@@ -16,8 +16,8 @@
 
 ## Constraints
 - Maximum 10 open positions at any time
-- Minimum market liquidity: $15K 24h volume AND orderbook depth > $10K
-- Must maintain 10% bankroll reserve ($1,000) — never risk more than 90%
+- Minimum market liquidity: $5K 24h volume AND orderbook depth > $3K
+- Must maintain 10% bankroll reserve ($100) — never risk more than 90%
 - Minimum edge: |estimated_prob - market_prob| >= 5%
 
 ## Prohibited (Phase 1)

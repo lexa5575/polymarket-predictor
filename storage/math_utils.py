@@ -116,8 +116,8 @@ def check_liquidity(
     - spread <= 0.05 (5%)  (mandate.md:24, risk_policy.md:25)
     """
     warnings: list[str] = []
-    if depth_10pct < 10_000:
-        warnings.append(f"Orderbook depth ${depth_10pct:,.0f} below $10K minimum")
+    if depth_10pct < 3_000:
+        warnings.append(f"Orderbook depth ${depth_10pct:,.0f} below $3K minimum")
     if volume_24h < 5_000:
         warnings.append(f"24h volume ${volume_24h:,.0f} below $5K minimum")
     if spread > 0.05:
