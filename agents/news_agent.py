@@ -71,7 +71,7 @@ news_agent = Agent(
         "\n\nRespond with a JSON object: query, sentiment_score (-1 to 1), key_narratives (array),"
         "\nsources_count, confidence (0 to 1)."
     ),
-    tools=[ExaTools(text=True, num_results=5)],
+    tools=[ExaTools(text=True, num_results=5, category="news")],
     output_schema=SentimentReport,
     knowledge=team_knowledge,
     search_knowledge=True,

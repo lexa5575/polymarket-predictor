@@ -26,10 +26,10 @@ from agents import (
     logger_agent,
     market_data_agent,
     news_agent,
-    polymarket_agent,
     risk_agent,
 )
 from agents.settings import get_paper_trade_store
+from tools.polymarket import PolymarketTools
 from schemas.market import (
     BetDecision,
     EventCandidate,
@@ -212,6 +212,115 @@ def _should_trade(
         reasons.extend(portfolio_warnings)
 
     return len(reasons) == 0, reasons
+
+
+# ---------------------------------------------------------------------------
+# Step: Event Scan (deterministic — no LLM)
+# ---------------------------------------------------------------------------
+
+_polymarket = PolymarketTools()
+
+
+def _build_token_book(book_data: dict, token_id: str) -> dict:
+    """Build TokenBook dict from CLOB orderbook response."""
+    bids = book_data.get("bids", [])
+    asks = book_data.get("asks", [])
+    best_bid = float(bids[0]["price"]) if bids else 0.0
+    best_ask = float(asks[0]["price"]) if asks else 0.0
+    spread = best_ask - best_bid if best_ask > 0 and best_bid > 0 else 0.0
+
+    # depth_10pct: sum of $ liquidity within 10% of midpoint
+    midpoint = (best_bid + best_ask) / 2 if best_bid > 0 and best_ask > 0 else 0.0
+    depth = 0.0
+    if midpoint > 0:
+        lo = midpoint * 0.9
+        hi = midpoint * 1.1
+        for bid in bids:
+            p = float(bid["price"])
+            if p >= lo:
+                depth += float(bid["size"]) * p
+        for ask in asks:
+            p = float(ask["price"])
+            if p <= hi:
+                depth += float(ask["size"]) * p
+
+    return {
+        "token_id": token_id,
+        "best_bid": best_bid,
+        "best_ask": best_ask,
+        "spread": round(spread, 4),
+        "depth_10pct": round(depth, 2),
+    }
+
+
+def run_event_scan(step_input: StepInput) -> StepOutput:
+    """Deterministic event scan: fetch market data + orderbooks from Polymarket API.
+
+    No LLM involved — all data comes directly from API.
+    Reads condition_id from workflow input.
+    """
+    # Get condition_id from workflow input
+    wf_input = step_input.workflow_input
+    condition_id = None
+    if hasattr(wf_input, "condition_id"):
+        condition_id = wf_input.condition_id
+    elif isinstance(wf_input, dict):
+        condition_id = wf_input.get("condition_id")
+
+    if not condition_id:
+        logger.error("Event Scan: no condition_id in workflow input")
+        return StepOutput(content=None)
+
+    try:
+        # Find market in active markets
+        markets = json.loads(_polymarket.get_active_crypto_markets(limit=100))
+        market = None
+        for m in markets:
+            if m.get("condition_id") == condition_id:
+                market = m
+                break
+
+        if not market:
+            logger.error("Event Scan: market %s not found", condition_id)
+            return StepOutput(content=None)
+
+        token_ids = market.get("clob_token_ids", [])
+        if len(token_ids) < 2:
+            logger.error("Event Scan: market %s has < 2 token IDs", condition_id)
+            return StepOutput(content=None)
+
+        yes_token_id = token_ids[0]
+        no_token_id = token_ids[1]
+
+        # Fetch orderbooks
+        yes_book_raw = json.loads(_polymarket.get_orderbook(yes_token_id))
+        no_book_raw = json.loads(_polymarket.get_orderbook(no_token_id))
+
+        yes_book = _build_token_book(yes_book_raw, yes_token_id)
+        no_book = _build_token_book(no_book_raw, no_token_id)
+
+        # Outcome prices
+        prices = market.get("outcome_prices", [])
+        market_prob_yes = float(prices[0]) if prices else 0.5
+
+        event = EventCandidate(
+            gamma_market_id=str(market.get("gamma_market_id", "")),
+            condition_id=condition_id,
+            market_slug=market.get("slug", ""),
+            question=market.get("question", ""),
+            category="crypto",
+            end_date=market.get("end_date", ""),
+            yes_book=yes_book,
+            no_book=no_book,
+            market_prob_yes=market_prob_yes,
+            volume_24h=float(market.get("volume_24h", 0)),
+            total_liquidity=yes_book["depth_10pct"] + no_book["depth_10pct"],
+        )
+        return StepOutput(content=event)
+
+    except Exception as e:
+        logger.error("Event Scan failed: %s", e)
+        return StepOutput(content=None)
 
 
 # ---------------------------------------------------------------------------
@@ -652,7 +761,7 @@ prediction_workflow = Workflow(
     id="prediction-workflow",
     name="Crypto Prediction Pipeline",
     steps=[
-        Step(name="Event Scan", agent=polymarket_agent),
+        Step(name="Event Scan", executor=run_event_scan),
         Parallel(
             Step(name="Market Data", agent=market_data_agent),  # type: ignore[arg-type]
             Step(name="News & Sentiment", agent=news_agent),  # type: ignore[arg-type]
