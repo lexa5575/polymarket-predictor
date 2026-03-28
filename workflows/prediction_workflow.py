@@ -737,14 +737,15 @@ def conditional_logging(step_input: StepInput) -> StepOutput:
     if decision.action != "BET" or decision.stake <= 0:
         return StepOutput(content={"action": "SKIP", "trade_id": None, "reason": decision.rationale})
 
-    # Get question from EventCandidate
+    # Get question + end_date from EventCandidate
     event = _step_content_to_model(step_input.get_step_output("Event Scan"), EventCandidate)
     question = event.question if event else decision.market_slug
+    end_date = event.end_date if event else ""
 
     # Record trade in DB (source of truth)
     try:
         store = get_paper_trade_store()
-        trade = store.open_trade(decision, question)
+        trade = store.open_trade(decision, question, end_date=end_date)
     except Exception as e:
         logger.error("Failed to record paper trade: %s", e)
         return StepOutput(content={"action": "ERROR", "trade_id": None, "reason": f"DB write failed: {e}"})

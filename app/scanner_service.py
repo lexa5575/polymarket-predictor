@@ -21,9 +21,9 @@ from tools.polymarket import PolymarketTools
 
 logger = logging.getLogger(__name__)
 
-# Strategy-fit horizon: only markets where price actively moves
-MIN_DAYS_TO_RESOLUTION = 7    # skip near-settled markets (price stuck)
-MAX_DAYS_TO_RESOLUTION = 365  # skip ultra-long markets (too slow for scalp)
+# Strategy-fit horizon: short-term markets where price moves fast
+MIN_DAYS_TO_RESOLUTION = 1    # skip already-expired markets
+MAX_DAYS_TO_RESOLUTION = 7    # focus on near-term resolution for active trading
 
 _polymarket = PolymarketTools()
 
@@ -47,6 +47,15 @@ def scan_candidates(max_candidates: int = 20) -> list[dict]:
         logger.error("Failed to fetch markets: %s", e)
         return []
 
+    # Funnel stats for debugging
+    stats = {
+        "total_fetched": len(markets),
+        "passed_asset": 0,
+        "passed_horizon": 0,
+        "passed_tokens": 0,
+        "passed_liquidity": 0,
+        "final_candidates": 0,
+    }
     candidates = []
 
     for m in markets:
@@ -57,6 +66,7 @@ def scan_candidates(max_candidates: int = 20) -> list[dict]:
         asset = match_asset(question)
         if not asset:
             continue
+        stats["passed_asset"] += 1
 
         # 2. Horizon filter — skip near-settled and ultra-long markets
         end_date_str = m.get("end_date", "")
@@ -71,11 +81,13 @@ def scan_candidates(max_candidates: int = 20) -> list[dict]:
                     continue
             except (ValueError, TypeError):
                 pass  # can't parse date → don't filter
+        stats["passed_horizon"] += 1
 
         # 3. Must have 2 token IDs
         token_ids = m.get("clob_token_ids", [])
         if len(token_ids) < 2:
             continue
+        stats["passed_tokens"] += 1
 
         volume_24h = float(m.get("volume_24h", 0))
 
@@ -110,6 +122,7 @@ def scan_candidates(max_candidates: int = 20) -> list[dict]:
         if not liquidity_ok:
             logger.debug("Filtered %s: %s", question[:40], "; ".join(warnings))
             continue
+        stats["passed_liquidity"] += 1
 
         # 5. Tradability score
         score = volume_24h * market_depth / (1 + market_spread * 100)
@@ -127,4 +140,8 @@ def scan_candidates(max_candidates: int = 20) -> list[dict]:
     # Sort by tradability score descending
     candidates.sort(key=lambda c: c["score"], reverse=True)
 
-    return candidates[:max_candidates]
+    result = candidates[:max_candidates]
+    stats["final_candidates"] = len(result)
+    logger.info("Scanner funnel: %s", stats)
+
+    return result

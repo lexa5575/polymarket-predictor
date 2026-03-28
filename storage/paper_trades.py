@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from schemas.market import BetDecision
 from schemas.paper_trade import BankrollSnapshot, PaperTrade
-from storage.exit_policy import MAX_HOLD_SECONDS, STOP_LOSS_PCT, TAKE_PROFIT_PCT
+from storage.exit_policy import MAX_HOLD_SECONDS, STOP_LOSS_PCT, TAKE_PROFIT_PCT, compute_max_hold
 from storage.math_utils import brier_score, calculate_mtm_pnl, calculate_pnl
 from storage.tables import BankrollSnapshotRow, PaperTradeRow, init_db
 
@@ -33,10 +33,11 @@ class PaperTradeStore:
     # Write operations
     # ------------------------------------------------------------------
 
-    def open_trade(self, decision: BetDecision, question: str) -> PaperTrade:
+    def open_trade(self, decision: BetDecision, question: str, end_date: str = "") -> PaperTrade:
         """Record a new paper trade from a BET decision."""
         trade_id = str(uuid.uuid4())
         now = datetime.now(timezone.utc)
+        max_hold = compute_max_hold(end_date) if end_date else MAX_HOLD_SECONDS
 
         row = PaperTradeRow(
             id=trade_id,
@@ -56,7 +57,7 @@ class PaperTradeStore:
             exit_conditions=decision.exit_conditions,
             take_profit_pct=TAKE_PROFIT_PCT,
             stop_loss_pct=STOP_LOSS_PCT,
-            max_hold_seconds=MAX_HOLD_SECONDS,
+            max_hold_seconds=max_hold,
         )
 
         with self._session_factory() as session:
