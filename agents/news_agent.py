@@ -1,10 +1,12 @@
 """
-News Agent
-----------
+News Agent (DEPRECATED)
+------------------------
 
-Sentiment analysis from X/Twitter and web sources.
-Model: GPT-4o-mini (reliable structured output).
-Tools: Exa web search (sync SDK, not MCP).
+Kept for dev UI and team-mode analysis only.
+NOT used in production workflow or /api/price-prediction.
+
+All sentiment for betting decisions comes from app/news_service.py
+(deterministic Exa fetch + LLM-only summary).
 """
 
 from agno.agent import Agent

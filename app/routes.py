@@ -346,7 +346,7 @@ async def price_prediction(request: PricePredictionRequest):
 
     Calls Market Data Agent, News Agent, and Risk Agent directly — no Polymarket needed.
     """
-    from agents import market_data_agent, news_agent, risk_agent
+    from agents import market_data_agent, risk_agent
 
     # 1. Get market data
     try:
@@ -360,16 +360,16 @@ async def price_prediction(request: PricePredictionRequest):
         logger.error("Market data agent failed: %s", e)
         market_data = {}
 
-    # 2. Get sentiment
+    # 2. Get sentiment (deterministic news service — same as workflow)
     try:
-        sentiment_response = await news_agent.arun(
-            f"What is the current sentiment for {request.coin} price "
-            f"in the next {request.timeframe}? Any catalysts or risks that could move the price?"
-        )
-        sentiment = _extract_dict_from_response(sentiment_response)
+        from app.news_service import fetch_sentiment
+
+        query = f"{request.coin} price {request.direction} ${request.price_target:,.0f} {request.timeframe}"
+        sentiment_report = fetch_sentiment(query)
+        sentiment = sentiment_report.model_dump(mode="json")
     except Exception as e:
-        logger.error("News agent failed: %s", e)
-        sentiment = {"sentiment_score": 0.0, "key_narratives": ["News agent unavailable"], "confidence": 0.1}
+        logger.error("News sentiment service failed: %s", e)
+        sentiment = {"sentiment_score": 0.0, "key_narratives": ["Sentiment service unavailable"], "confidence": 0.1}
 
     # 3. Get prediction from Risk Agent
     current_price = market_data.get("price_usd", 0)
