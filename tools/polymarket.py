@@ -109,42 +109,28 @@ class PolymarketTools(Toolkit):
         """
         all_markets = []
 
-        # Source 1: Crypto price events (BTC/ETH/SOL price targets — thousands of markets)
-        for tag_slug in ["crypto-prices", "crypto"]:
-            try:
-                resp = httpx.get(
-                    f"{GAMMA_BASE}/events",
-                    params={
-                        "tag_slug": tag_slug,
-                        "active": "true",
-                        "closed": "false",
-                        "limit": "50",
-                    },
-                    timeout=20,
-                )
-                resp.raise_for_status()
-                events = resp.json()
-                if isinstance(events, list):
-                    for event in events:
-                        for m in event.get("markets", []):
-                            if not m.get("active", True) or m.get("closed", False):
-                                continue
-                            all_markets.append(m)
-            except Exception:
-                pass
-
-        # Source 2: General markets search (fallback)
+        # Betting universe: only crypto-prices (BTC/ETH/SOL price targets)
+        # These map cleanly to CoinGecko/Binance market data.
+        # Broad "crypto" tag includes launches/FDV/regulatory markets that
+        # our Market Data Agent can't support — excluded from betting path.
         try:
             resp = httpx.get(
-                f"{GAMMA_BASE}/markets",
-                params={"active": "true", "closed": "false", "limit": "100"},
-                timeout=15,
+                f"{GAMMA_BASE}/events",
+                params={
+                    "tag_slug": "crypto-prices",
+                    "active": "true",
+                    "closed": "false",
+                    "limit": "50",
+                },
+                timeout=20,
             )
             resp.raise_for_status()
-            markets = resp.json()
-            if isinstance(markets, list):
-                for m in markets:
-                    if _is_crypto_market(m):
+            events = resp.json()
+            if isinstance(events, list):
+                for event in events:
+                    for m in event.get("markets", []):
+                        if not m.get("active", True) or m.get("closed", False):
+                            continue
                         all_markets.append(m)
         except Exception:
             pass
