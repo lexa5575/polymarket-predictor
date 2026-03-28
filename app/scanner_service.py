@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 
 from storage.math_utils import check_liquidity
 from storage.orderbook_utils import parse_orderbook
@@ -19,6 +20,10 @@ from storage.supported_assets import match_asset
 from tools.polymarket import PolymarketTools
 
 logger = logging.getLogger(__name__)
+
+# Strategy-fit horizon: only markets where price actively moves
+MIN_DAYS_TO_RESOLUTION = 7    # skip near-settled markets (price stuck)
+MAX_DAYS_TO_RESOLUTION = 365  # skip ultra-long markets (too slow for scalp)
 
 _polymarket = PolymarketTools()
 
@@ -53,7 +58,21 @@ def scan_candidates(max_candidates: int = 20) -> list[dict]:
         if not asset:
             continue
 
-        # 2. Must have 2 token IDs
+        # 2. Horizon filter — skip near-settled and ultra-long markets
+        end_date_str = m.get("end_date", "")
+        if end_date_str:
+            try:
+                end_date = datetime.fromisoformat(end_date_str.replace("Z", "+00:00"))
+                now = datetime.now(timezone.utc)
+                days_left = (end_date - now).days
+                if days_left < MIN_DAYS_TO_RESOLUTION:
+                    continue
+                if days_left > MAX_DAYS_TO_RESOLUTION:
+                    continue
+            except (ValueError, TypeError):
+                pass  # can't parse date → don't filter
+
+        # 3. Must have 2 token IDs
         token_ids = m.get("clob_token_ids", [])
         if len(token_ids) < 2:
             continue
