@@ -259,8 +259,8 @@ def run_event_scan(step_input: StepInput) -> StepOutput:
     No LLM involved — all data comes directly from API.
     Reads condition_id from workflow input.
     """
-    # Get condition_id from workflow input
-    wf_input = step_input.workflow_input
+    # Get condition_id from workflow input (step_input.input = PredictionRequest)
+    wf_input = step_input.input
     condition_id = None
     if hasattr(wf_input, "condition_id"):
         condition_id = wf_input.condition_id
