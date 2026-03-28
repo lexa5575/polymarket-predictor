@@ -129,6 +129,18 @@ class TestMonitor:
         assert result["trades_closed"][0]["reason"] == "resolution"
         assert result["trades_closed"][0]["outcome"] == "YES"
 
+    def test_monitor_resolved_ambiguous_outcome_skip(self, store, monkeypatch):
+        """Resolved market with ambiguous outcome → skip entirely (fail-closed), no early exit."""
+        trade = store.open_trade(_sample_decision(), "Q")
+        # High price would trigger TP, but market is resolved with no clear outcome
+        pm = _FakePolymarket(
+            orderbooks={trade.token_id: _make_orderbook(0.60)},
+            resolutions={trade.condition_id: _make_resolution("resolved", None)},
+        )
+        result = self._run(store, pm, monkeypatch)
+        assert result["closed"] == 0  # NOT closed as take_profit
+        assert any("ambiguous" in (t.get("warning") or "") for t in result["trades_open"])
+
     def test_monitor_no_bids_skip(self, store, monkeypatch):
         """No bids, not resolved → stays open with warning."""
         trade = store.open_trade(_sample_decision(), "Q")

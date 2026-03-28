@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 
 from agents.settings import get_paper_trade_store
 from storage.exit_policy import MAX_HOLD_SECONDS, STOP_LOSS_PCT, TAKE_PROFIT_PCT
-from storage.math_utils import calculate_mtm_pnl, get_exit_price_from_orderbook
+from storage.math_utils import calculate_mtm_pnl, check_exit_conditions, get_exit_price_from_orderbook
 from tools.polymarket import PolymarketTools
 
 logger = logging.getLogger(__name__)
@@ -68,11 +68,13 @@ def run_monitor() -> dict:
                         "outcome": outcome,
                     })
                     continue
-                # resolved but ambiguous outcome → skip, log warning
+                # resolved but ambiguous outcome → fail-closed, skip entirely
                 logger.warning(
                     "Market %s resolved but outcome=%s, skipping",
                     trade.condition_id, outcome,
                 )
+                open_status.append({"trade_id": trade.id, "warning": f"resolved but ambiguous outcome: {outcome}"})
+                continue
 
             # === ORDERBOOK ONLY FOR EARLY EXIT ===
             book = json.loads(_polymarket_tools.get_orderbook(trade.token_id))
@@ -83,17 +85,11 @@ def run_monitor() -> dict:
                 continue
 
             unrealized_pnl = calculate_mtm_pnl(trade.entry_fill_price, exit_price, trade.stake)
-            pnl_pct = unrealized_pnl / trade.stake if trade.stake > 0 else 0.0
 
-            # Check early exit conditions (resolution already handled above)
-            should_exit = False
-            reason = None
-            if pnl_pct <= sl:
-                should_exit, reason = True, "stop_loss"
-            elif pnl_pct >= tp:
-                should_exit, reason = True, "take_profit"
-            elif age >= mh:
-                should_exit, reason = True, "max_hold"
+            # Single source of truth for exit logic (market_resolved=False: already handled above)
+            should_exit, reason = check_exit_conditions(
+                unrealized_pnl, trade.stake, age, False, tp, sl, mh,
+            )
 
             if should_exit:
                 result = store.close_trade(trade.id, exit_price, reason)
@@ -107,7 +103,7 @@ def run_monitor() -> dict:
                 open_status.append({
                     "trade_id": trade.id,
                     "unrealized_pnl": round(unrealized_pnl, 2),
-                    "unrealized_pnl_pct": round(pnl_pct, 4),
+                    "unrealized_pnl_pct": round(unrealized_pnl / trade.stake, 4) if trade.stake > 0 else 0.0,
                     "current_price": exit_price,
                     "age_minutes": round(age / 60, 1),
                 })
